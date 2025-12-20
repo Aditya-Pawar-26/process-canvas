@@ -1,31 +1,14 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Navigation } from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Play, RotateCcw, ChevronRight, Pause, SkipForward } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Play, RotateCcw, ChevronRight, Pause, SkipForward, Code, Terminal } from 'lucide-react';
+import { useCodeParser, ParsedProcess } from '@/hooks/useCodeParser';
 
-// Simple process node type for visualization only
-interface SimpleProcessNode {
-  id: string;
-  pid: number;
-  ppid: number;
-  state: 'running' | 'waiting' | 'terminated' | 'zombie';
-  children: SimpleProcessNode[];
-  depth: number;
-}
-
-interface CodeTemplate {
-  id: string;
-  name: string;
-  description: string;
-  code: string;
-  expectedSteps: string[];
-}
-
-const codeTemplates: CodeTemplate[] = [
+const codeTemplates = [
   {
     id: 'single-fork',
     name: 'Single Fork',
@@ -39,23 +22,15 @@ int main() {
     pid_t pid = fork();
     
     if (pid == 0) {
-        // Child process
         printf("Child PID: %d\\n", getpid());
+        exit(0);
     } else {
-        // Parent process
         printf("Created child: %d\\n", pid);
+        wait(NULL);
     }
     
     return 0;
-}`,
-    expectedSteps: [
-      'Parent process (PID 1000) starts execution',
-      'fork() called - creating child process',
-      'Child process (PID 1001) created',
-      'Parent continues: prints "Created child: 1001"',
-      'Child executes: prints "Child PID: 1001"',
-      'Both processes exit'
-    ]
+}`
   },
   {
     id: 'fork-wait',
@@ -69,28 +44,18 @@ int main() {
     pid_t pid = fork();
     
     if (pid == 0) {
-        // Child process
         printf("Child working...\\n");
         sleep(2);
         printf("Child done\\n");
         exit(0);
     } else {
-        // Parent waits for child
         printf("Parent waiting...\\n");
         wait(NULL);
         printf("Child finished\\n");
     }
     
     return 0;
-}`,
-    expectedSteps: [
-      'Parent process (PID 1000) starts',
-      'fork() called - child process created',
-      'Child (PID 1001) starts working',
-      'Parent calls wait() - enters WAITING state',
-      'Child completes and exits',
-      'Parent resumes after wait() returns'
-    ]
+}`
   },
   {
     id: 'multiple-fork',
@@ -104,27 +69,18 @@ int main() {
         pid_t pid = fork();
         
         if (pid == 0) {
-            printf("Child %d: PID %d\\n", i, getpid());
+            printf("Child %d created\\n", i);
             exit(0);
         }
     }
     
-    // Parent waits for all children
     for (int i = 0; i < 3; i++) {
         wait(NULL);
     }
     
     printf("All children done\\n");
     return 0;
-}`,
-    expectedSteps: [
-      'Parent (PID 1000) starts loop',
-      'First fork() - Child 1 (PID 1001) created',
-      'Second fork() - Child 2 (PID 1002) created',
-      'Third fork() - Child 3 (PID 1003) created',
-      'Parent waits for each child',
-      'All children complete, parent continues'
-    ]
+}`
   },
   {
     id: 'zombie-process',
@@ -137,26 +93,15 @@ int main() {
     pid_t pid = fork();
     
     if (pid == 0) {
-        // Child exits immediately
         printf("Child exiting...\\n");
         exit(0);
     } else {
-        // Parent does NOT call wait()
         printf("Parent sleeping...\\n");
         sleep(30);
-        // Child becomes zombie!
     }
     
     return 0;
-}`,
-    expectedSteps: [
-      'Parent (PID 1000) forks child',
-      'Child (PID 1001) created',
-      'Child exits immediately',
-      'Parent sleeps without calling wait()',
-      'Child becomes ZOMBIE (defunct)',
-      'Child remains zombie until parent exits'
-    ]
+}`
   },
   {
     id: 'orphan-process',
@@ -169,31 +114,21 @@ int main() {
     pid_t pid = fork();
     
     if (pid == 0) {
-        // Child sleeps longer
-        sleep(10);
-        printf("Child: my parent is now init\\n");
+        sleep(5);
+        printf("Child: parent is now init\\n");
         printf("New PPID: %d\\n", getppid());
     } else {
-        // Parent exits immediately
         printf("Parent exiting...\\n");
         exit(0);
     }
     
     return 0;
-}`,
-    expectedSteps: [
-      'Parent (PID 1000) forks child',
-      'Child (PID 1001) starts sleeping',
-      'Parent exits immediately',
-      'Child becomes ORPHAN',
-      'Child adopted by init (PID 1)',
-      'Child continues with new parent'
-    ]
+}`
   },
   {
     id: 'recursive-fork',
     name: 'Recursive Forking',
-    description: 'Recursive process creation (fork bomb pattern)',
+    description: 'Recursive process creation (fork chain)',
     code: `#include <stdio.h>
 #include <unistd.h>
 
@@ -214,477 +149,308 @@ void recursive_fork(int depth) {
 int main() {
     recursive_fork(3);
     return 0;
-}`,
-    expectedSteps: [
-      'Main (PID 1000) calls recursive_fork(3)',
-      'Fork at depth 3 → Child (PID 1001)',
-      'Child 1001 calls recursive_fork(2)',
-      'Fork at depth 2 → Child (PID 1002)',
-      'Child 1002 calls recursive_fork(1)',
-      'Fork at depth 1 → Child (PID 1003)',
-      'Depth 0 reached, recursion ends',
-      'Each parent waits for its child'
-    ]
+}`
   }
 ];
 
 export default function CodeEditor() {
   const [selectedTemplate, setSelectedTemplate] = useState<string>(codeTemplates[0].id);
   const [code, setCode] = useState(codeTemplates[0].code);
-  const [isRunning, setIsRunning] = useState(false);
-  const [currentStep, setCurrentStep] = useState(-1);
-  const [processes, setProcesses] = useState<SimpleProcessNode[]>([]);
-  const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
-
-  const currentTemplate = codeTemplates.find(t => t.id === selectedTemplate)!;
+  const [isPlaying, setIsPlaying] = useState(false);
+  
+  const {
+    processes,
+    executionSteps,
+    currentStepIndex,
+    logs,
+    initializeExecution,
+    executeStep,
+    reset,
+    getCurrentStep,
+    isComplete
+  } = useCodeParser();
 
   const handleTemplateChange = (templateId: string) => {
-    const template = codeTemplates.find(t => t.id === templateId)!;
-    setSelectedTemplate(templateId);
-    setCode(template.code);
-    resetExecution();
+    const template = codeTemplates.find(t => t.id === templateId);
+    if (template) {
+      setSelectedTemplate(templateId);
+      setCode(template.code);
+      reset();
+      setIsPlaying(false);
+    }
   };
 
-  const resetExecution = () => {
-    setIsRunning(false);
-    setCurrentStep(-1);
-    setProcesses([]);
-    setHighlightedLine(null);
+  const handleRun = useCallback(() => {
+    if (currentStepIndex === -1) {
+      initializeExecution(code);
+    }
+    setIsPlaying(true);
+  }, [currentStepIndex, code, initializeExecution]);
+
+  const handlePause = () => {
+    setIsPlaying(false);
   };
 
-  const initializeProcessTree = useCallback(() => {
-    const root: SimpleProcessNode = {
-      id: '1000',
-      pid: 1000,
-      ppid: 1,
-      state: 'running',
-      children: [],
-      depth: 0
-    };
-    setProcesses([root]);
-    return root;
-  }, []);
+  const handleStep = useCallback(() => {
+    if (currentStepIndex === -1) {
+      initializeExecution(code);
+    }
+    executeStep();
+  }, [currentStepIndex, code, initializeExecution, executeStep]);
 
-  const runNextStep = useCallback(() => {
-    const steps = currentTemplate.expectedSteps;
-    
-    if (currentStep < steps.length - 1) {
-      const nextStep = currentStep + 1;
-      setCurrentStep(nextStep);
-      
-      // Simulate process tree changes based on step
-      setProcesses(prev => {
-        const newProcesses = [...prev];
-        
-        if (nextStep === 0) {
-          // Initialize with root
-          return [{
-            id: '1000',
-            pid: 1000,
-            ppid: 1,
-            state: 'running',
-            children: [],
-            depth: 0
-          } as SimpleProcessNode];
-        }
-        
-        // Add children based on template type
-        if (selectedTemplate === 'single-fork' || selectedTemplate === 'fork-wait') {
-          if (nextStep === 2) {
-            const root = { ...newProcesses[0] };
-            const child: SimpleProcessNode = {
-              id: '1001',
-              pid: 1001,
-              ppid: 1000,
-              state: 'running',
-              children: [],
-              depth: 1
-            };
-            root.children = [child];
-            return [root];
-          }
-          if (selectedTemplate === 'fork-wait' && nextStep === 3) {
-            const root = { ...newProcesses[0], state: 'waiting' as const };
-            if (root.children[0]) {
-              root.children = [{ ...root.children[0], state: 'running' as const }];
-            }
-            return [root];
-          }
-          if (nextStep === 4 || nextStep === 5) {
-            const root = { ...newProcesses[0], state: 'running' as const };
-            if (root.children[0]) {
-              root.children = [{ ...root.children[0], state: 'terminated' as const }];
-            }
-            return [root];
-          }
-        }
-        
-        if (selectedTemplate === 'multiple-fork') {
-          if (nextStep >= 1 && nextStep <= 3) {
-            const root = { ...newProcesses[0] };
-            const childCount = nextStep;
-            root.children = Array.from({ length: childCount }, (_, i): SimpleProcessNode => ({
-              id: `${1001 + i}`,
-              pid: 1001 + i,
-              ppid: 1000,
-              state: 'running',
-              children: [],
-              depth: 1
-            }));
-            return [root];
-          }
-          if (nextStep >= 4) {
-            const root = { ...newProcesses[0], state: nextStep === 4 ? 'waiting' as const : 'running' as const };
-            root.children = root.children.map(c => ({ ...c, state: 'terminated' as const }));
-            return [root];
-          }
-        }
-        
-        if (selectedTemplate === 'zombie-process') {
-          if (nextStep === 1) {
-            const root = { ...newProcesses[0] };
-            root.children = [{
-              id: '1001',
-              pid: 1001,
-              ppid: 1000,
-              state: 'running',
-              children: [],
-              depth: 1
-            } as SimpleProcessNode];
-            return [root];
-          }
-          if (nextStep >= 3) {
-            const root = { ...newProcesses[0] };
-            root.children = [{
-              id: '1001',
-              pid: 1001,
-              ppid: 1000,
-              state: 'zombie',
-              children: [],
-              depth: 1
-            } as SimpleProcessNode];
-            return [root];
-          }
-        }
-        
-        if (selectedTemplate === 'orphan-process') {
-          if (nextStep === 1) {
-            const root = { ...newProcesses[0] };
-            root.children = [{
-              id: '1001',
-              pid: 1001,
-              ppid: 1000,
-              state: 'running',
-              children: [],
-              depth: 1
-            } as SimpleProcessNode];
-            return [root];
-          }
-          if (nextStep >= 3) {
-            // Parent exits, child becomes orphan
-            return [{
-              id: '1001',
-              pid: 1001,
-              ppid: 1,
-              state: 'running',
-              children: [],
-              depth: 0
-            } as SimpleProcessNode];
-          }
-        }
-        
-        if (selectedTemplate === 'recursive-fork') {
-          if (nextStep >= 1 && nextStep <= 6) {
-            const depth = Math.min(nextStep, 3);
-            let current: SimpleProcessNode = {
-              id: '1000',
-              pid: 1000,
-              ppid: 1,
-              state: 'running',
-              children: [],
-              depth: 0
-            };
-            const root = current;
-            
-            for (let i = 0; i < depth; i++) {
-              const child: SimpleProcessNode = {
-                id: `${1001 + i}`,
-                pid: 1001 + i,
-                ppid: current.pid,
-                state: i === depth - 1 ? 'running' : 'waiting',
-                children: [],
-                depth: i + 1
-              };
-              current.children = [child];
-              current = child;
-            }
-            
-            return [root];
-          }
-        }
-        
-        return newProcesses;
-      });
-      
-      // Highlight relevant code line
-      const lineMap: Record<string, number[]> = {
-        'single-fork': [4, 6, 6, 13, 9, 16],
-        'fork-wait': [4, 4, 8, 13, 10, 15],
-        'multiple-fork': [4, 5, 5, 5, 13, 16],
-        'zombie-process': [4, 4, 8, 11, 8, 8],
-        'orphan-process': [4, 7, 13, 7, 8, 9],
-        'recursive-fork': [6, 6, 6, 6, 6, 6, 3, 11]
+  const handleReset = () => {
+    reset();
+    setIsPlaying(false);
+  };
+
+  // Auto-play effect
+  useEffect(() => {
+    if (isPlaying && !isComplete) {
+      const timer = setTimeout(() => {
+        executeStep();
+      }, 1000);
+      return () => clearTimeout(timer);
+    } else if (isComplete) {
+      setIsPlaying(false);
+    }
+  }, [isPlaying, isComplete, executeStep]);
+
+  const currentStep = getCurrentStep();
+  const currentLine = currentStep?.lineNumber ?? -1;
+
+  const renderProcessTree = (procs: ParsedProcess[], depth: number = 0): JSX.Element[] => {
+    return procs.map((proc) => {
+      const stateColors: Record<string, string> = {
+        running: 'border-process-running bg-process-running/10',
+        waiting: 'border-process-waiting bg-process-waiting/10',
+        terminated: 'border-muted bg-muted/10',
+        zombie: 'border-process-zombie bg-process-zombie/10',
+        orphan: 'border-purple-500 bg-purple-500/10'
       };
-      
-      const lines = lineMap[selectedTemplate] || [];
-      setHighlightedLine(lines[nextStep] || null);
-    } else {
-      setIsRunning(false);
-    }
-  }, [currentStep, currentTemplate, selectedTemplate]);
 
-  const handleRun = () => {
-    if (isRunning) {
-      setIsRunning(false);
-    } else {
-      if (currentStep === -1) {
-        initializeProcessTree();
-      }
-      setIsRunning(true);
-    }
-  };
+      const stateLabels: Record<string, string> = {
+        running: 'Running',
+        waiting: 'Waiting',
+        terminated: 'Exited',
+        zombie: 'Zombie',
+        orphan: 'Orphan'
+      };
 
-  // Auto-advance when running
-  useState(() => {
-    if (isRunning) {
-      const timer = setInterval(runNextStep, 1500);
-      return () => clearInterval(timer);
-    }
-  });
-
-  const renderProcessNode = (node: SimpleProcessNode, x: number, y: number): JSX.Element => {
-    const stateColors = {
-      running: 'border-process-running bg-process-running/10',
-      waiting: 'border-process-waiting bg-process-waiting/10',
-      terminated: 'border-muted bg-muted/10',
-      zombie: 'border-process-zombie bg-process-zombie/10'
-    };
-
-    const stateLabels = {
-      running: 'Running',
-      waiting: 'Waiting',
-      terminated: 'Exited',
-      zombie: 'Zombie'
-    };
-
-    return (
-      <g key={node.id}>
-        <foreignObject x={x - 50} y={y - 30} width={100} height={70}>
-          <div className={`rounded-lg border-2 p-2 text-center transition-all duration-300 ${stateColors[node.state]}`}>
-            <div className="font-mono text-sm font-bold text-foreground">PID {node.pid}</div>
-            <div className="text-xs text-muted-foreground">PPID: {node.ppid}</div>
+      return (
+        <div key={proc.id} className="flex flex-col items-center">
+          <div
+            className={`rounded-lg border-2 p-3 text-center transition-all duration-300 min-w-[100px] ${stateColors[proc.state]}`}
+          >
+            <div className="font-mono text-sm font-bold text-foreground">PID {proc.pid}</div>
+            <div className="text-xs text-muted-foreground">PPID: {proc.ppid}</div>
             <Badge variant="outline" className="text-xs mt-1">
-              {stateLabels[node.state]}
+              {stateLabels[proc.state]}
             </Badge>
           </div>
-        </foreignObject>
-        
-        {node.children.map((child, index) => {
-          const childX = x + (index - (node.children.length - 1) / 2) * 120;
-          const childY = y + 100;
-          
-          return (
-            <g key={child.id}>
-              <line
-                x1={x}
-                y1={y + 35}
-                x2={childX}
-                y2={childY - 35}
-                stroke="hsl(var(--primary))"
-                strokeWidth={2}
-                strokeDasharray="4"
-                className="animate-pulse"
-              />
-              {renderProcessNode(child, childX, childY)}
-            </g>
-          );
-        })}
-      </g>
-    );
+          {proc.children.length > 0 && (
+            <>
+              <div className="w-px h-6 bg-primary/50" />
+              <div className="flex gap-4">
+                {renderProcessTree(proc.children, depth + 1)}
+              </div>
+            </>
+          )}
+        </div>
+      );
+    });
   };
-
-  const codeLines = code.split('\n');
 
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
-      
-      <div className="container py-6">
-        <div className="mb-6">
+
+      <main className="container py-6">
+        <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-foreground mb-2">Code Template Editor</h1>
           <p className="text-muted-foreground">
-            Edit and visualize C code execution with process tree animations
+            Write or modify C-like code and visualize process execution step-by-step
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Code Editor Panel */}
-          <div className="space-y-4">
-            <Card className="border-border bg-card">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">Template Selection</CardTitle>
-                  <Select value={selectedTemplate} onValueChange={handleTemplateChange}>
-                    <SelectTrigger className="w-[200px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {codeTemplates.map(template => (
-                        <SelectItem key={template.id} value={template.id}>
-                          {template.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <p className="text-sm text-muted-foreground">{currentTemplate.description}</p>
-              </CardHeader>
-            </Card>
-
-            <Card className="border-border bg-card">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg font-mono">main.c</CardTitle>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={resetExecution}
-                    >
-                      <RotateCcw className="w-4 h-4 mr-1" />
-                      Reset
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={handleRun}
-                      className="bg-primary hover:bg-primary/90"
-                    >
-                      {isRunning ? (
-                        <>
-                          <Pause className="w-4 h-4 mr-1" />
-                          Pause
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-4 h-4 mr-1" />
-                          Run
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={runNextStep}
-                      disabled={currentStep >= currentTemplate.expectedSteps.length - 1}
-                    >
-                      <SkipForward className="w-4 h-4 mr-1" />
-                      Step
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="relative font-mono text-sm bg-secondary/50 rounded-lg overflow-hidden">
-                  <div className="absolute left-0 top-0 bottom-0 w-12 bg-secondary/80 flex flex-col items-end pr-2 pt-3 text-muted-foreground select-none">
-                    {codeLines.map((_, i) => (
-                      <div 
-                        key={i} 
-                        className={`leading-6 text-xs ${highlightedLine === i + 1 ? 'text-primary font-bold' : ''}`}
+        <div className="grid lg:grid-cols-2 gap-6">
+          {/* Code Panel */}
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Code className="w-5 h-5 text-primary" />
+                  Code Editor
+                </CardTitle>
+                <Select value={selectedTemplate} onValueChange={handleTemplateChange}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="Select template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {codeTemplates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="bg-background rounded-lg border border-border overflow-hidden">
+                <div className="flex">
+                  {/* Line numbers */}
+                  <div className="bg-muted/30 px-3 py-4 text-right select-none">
+                    {code.split('\n').map((_, i) => (
+                      <div
+                        key={i}
+                        className={`text-xs font-mono leading-6 ${
+                          currentLine === i + 1
+                            ? 'text-primary font-bold'
+                            : 'text-muted-foreground'
+                        }`}
                       >
                         {i + 1}
                       </div>
                     ))}
                   </div>
-                  <Textarea
+                  {/* Code */}
+                  <textarea
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
-                    className="min-h-[400px] pl-14 pr-4 py-3 bg-transparent border-0 resize-none focus-visible:ring-0 focus-visible:ring-offset-0 leading-6"
-                    style={{ fontFamily: 'JetBrains Mono, monospace' }}
+                    className="flex-1 bg-transparent p-4 font-mono text-sm text-foreground resize-none focus:outline-none min-h-[400px] leading-6"
+                    spellCheck={false}
+                    style={{
+                      background: code.split('\n').map((_, i) =>
+                        currentLine === i + 1
+                          ? `linear-gradient(hsl(var(--primary) / 0.15), hsl(var(--primary) / 0.15))`
+                          : 'transparent'
+                      ).join(', ')
+                    }}
                   />
-                  {highlightedLine && (
-                    <div 
-                      className="absolute left-12 right-0 h-6 bg-primary/20 pointer-events-none transition-all duration-300"
-                      style={{ top: `${(highlightedLine - 1) * 24 + 12}px` }}
-                    />
-                  )}
                 </div>
-              </CardContent>
-            </Card>
-          </div>
+              </div>
+
+              {/* Controls */}
+              <div className="flex gap-2 mt-4">
+                {isPlaying ? (
+                  <Button onClick={handlePause} variant="outline" className="gap-2">
+                    <Pause className="w-4 h-4" />
+                    Pause
+                  </Button>
+                ) : (
+                  <Button onClick={handleRun} className="gap-2 glow-primary">
+                    <Play className="w-4 h-4" />
+                    Run
+                  </Button>
+                )}
+                <Button onClick={handleStep} variant="outline" className="gap-2" disabled={isComplete}>
+                  <SkipForward className="w-4 h-4" />
+                  Step
+                </Button>
+                <Button onClick={handleReset} variant="outline" className="gap-2">
+                  <RotateCcw className="w-4 h-4" />
+                  Reset
+                </Button>
+              </div>
+
+              {/* Current Step Info */}
+              {currentStep && (
+                <div className="mt-4 p-4 bg-primary/10 border border-primary/30 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <ChevronRight className="w-4 h-4 text-primary" />
+                    <span className="font-semibold text-primary">Step {currentStepIndex + 1}</span>
+                  </div>
+                  <p className="text-sm font-mono text-muted-foreground">{currentStep.code}</p>
+                  <p className="text-sm mt-2">{currentStep.description}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{currentStep.osExplanation}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Visualization Panel */}
           <div className="space-y-4">
-            <Card className="border-border bg-card">
+            <Card className="bg-card border-border">
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Process Tree Visualization</CardTitle>
+                <CardTitle>Process Tree</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="bg-secondary/30 rounded-lg h-[300px] relative overflow-hidden">
-                  {processes.length > 0 ? (
-                    <svg width="100%" height="100%" viewBox="0 0 400 280">
-                      {renderProcessNode(processes[0], 200, 50)}
-                    </svg>
+                <div className="min-h-[300px] flex items-center justify-center">
+                  {processes.length === 0 ? (
+                    <div className="text-center text-muted-foreground">
+                      <p>Click "Run" or "Step" to start simulation</p>
+                    </div>
                   ) : (
-                    <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-                      Click "Run" or "Step" to start visualization
+                    <div className="flex flex-col items-center gap-4">
+                      {renderProcessTree(processes)}
                     </div>
                   )}
                 </div>
               </CardContent>
             </Card>
 
-            <Card className="border-border bg-card">
+            {/* Console Output */}
+            <Card className="bg-card border-border">
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg">Execution Steps</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Terminal className="w-5 h-5 text-primary" />
+                  Console Output
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                  {currentTemplate.expectedSteps.map((step, index) => (
-                    <div
-                      key={index}
-                      className={`flex items-start gap-3 p-3 rounded-lg transition-all duration-300 ${
-                        index === currentStep 
-                          ? 'bg-primary/20 border border-primary' 
-                          : index < currentStep 
-                            ? 'bg-secondary/50 opacity-60' 
-                            : 'bg-secondary/20'
-                      }`}
-                    >
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                        index === currentStep 
-                          ? 'bg-primary text-primary-foreground' 
-                          : index < currentStep 
-                            ? 'bg-process-running text-white' 
-                            : 'bg-muted text-muted-foreground'
-                      }`}>
-                        {index < currentStep ? '✓' : index + 1}
-                      </div>
-                      <div className="flex-1">
-                        <p className={`text-sm ${index === currentStep ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                          {step}
-                        </p>
-                      </div>
-                      {index === currentStep && (
-                        <ChevronRight className="w-4 h-4 text-primary animate-pulse" />
-                      )}
+                <ScrollArea className="h-[150px] bg-background rounded-lg border border-border p-3">
+                  {logs.length === 0 ? (
+                    <p className="text-muted-foreground text-sm font-mono">No output yet...</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {logs.map((log, i) => (
+                        <div key={i} className="text-sm font-mono text-foreground">
+                          <span className="text-muted-foreground">$</span> {log}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  )}
+                </ScrollArea>
               </CardContent>
             </Card>
+
+            {/* Execution Steps */}
+            {executionSteps.length > 0 && (
+              <Card className="bg-card border-border">
+                <CardHeader className="pb-3">
+                  <CardTitle>Execution Steps</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ScrollArea className="h-[150px]">
+                    <div className="space-y-2">
+                      {executionSteps.map((step, i) => (
+                        <div
+                          key={i}
+                          className={`p-2 rounded-lg text-sm ${
+                            i === currentStepIndex
+                              ? 'bg-primary/20 border border-primary'
+                              : i < currentStepIndex
+                              ? 'bg-muted/50'
+                              : 'bg-background'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="font-mono">
+                              L{step.lineNumber}
+                            </Badge>
+                            <span className="font-medium">{step.action}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">{step.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

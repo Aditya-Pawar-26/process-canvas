@@ -1,4 +1,4 @@
-export type ProcessState = 'running' | 'waiting' | 'zombie' | 'terminated';
+export type ProcessState = 'running' | 'waiting' | 'zombie' | 'terminated' | 'orphan';
 
 export interface ProcessNode {
   id: string;
@@ -8,6 +8,7 @@ export interface ProcessNode {
   children: ProcessNode[];
   createdAt: number;
   depth: number;
+  isOrphan?: boolean;
 }
 
 export interface LogEntry {
@@ -30,7 +31,7 @@ export interface Scenario {
 }
 
 export interface ScenarioStep {
-  action: 'fork' | 'wait' | 'exit';
+  action: 'fork' | 'wait' | 'exit' | 'orphan';
   targetPid?: number;
   description: string;
   osExplanation: string;
@@ -47,9 +48,27 @@ export interface Challenge {
   difficulty: 'beginner' | 'intermediate' | 'advanced';
 }
 
-export type TraversalType = 'preorder' | 'postorder' | 'levelorder';
+export type TraversalType = 'preorder' | 'postorder' | 'levelorder' | 'inorder';
 
 export interface TraversalStep {
   nodeId: string;
   order: number;
+}
+
+// DSA Tree Node - simpler structure for DSA page
+export interface DSANode {
+  id: string;
+  value: number;
+  children: DSANode[];
+  depth: number;
+  parent?: DSANode;
+}
+
+// Code execution types
+export interface ExecutionStep {
+  line: number;
+  code: string;
+  explanation: string;
+  action: 'fork' | 'wait' | 'exit' | 'print' | 'sleep' | 'none';
+  effect?: () => void;
 }
