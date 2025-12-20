@@ -8,31 +8,30 @@ import {
   BookOpen, 
   Code, 
   TreeDeciduous, 
-  Trophy, 
   HelpCircle,
   Menu,
-  X
+  X,
+  Compass
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, forwardRef } from 'react';
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/dashboard', label: 'Dashboard', icon: Play },
   { path: '/scenarios', label: 'Scenarios', icon: Library },
-  { path: '/guided', label: 'Guided Mode', icon: BookOpen },
+  { path: '/guided', label: 'Guided Mode', icon: Compass },
   { path: '/code-editor', label: 'Code Editor', icon: Code },
   { path: '/dsa-tree', label: 'DSA Tree', icon: TreeDeciduous },
-  { path: '/challenges', label: 'Challenges', icon: Trophy },
   { path: '/theory', label: 'Theory', icon: BookOpen },
   { path: '/help', label: 'Help', icon: HelpCircle },
 ];
 
-export const Navigation = () => {
+export const Navigation = forwardRef<HTMLElement>((_, ref) => {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <nav className="sticky top-0 z-50 w-full border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60">
+    <nav ref={ref} className="sticky top-0 z-50 w-full border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60">
       <div className="container flex h-14 items-center">
         <Link to="/" className="flex items-center space-x-2 mr-6">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
@@ -115,4 +114,6 @@ export const Navigation = () => {
       )}
     </nav>
   );
-};
+});
+
+Navigation.displayName = 'Navigation';
