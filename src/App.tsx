@@ -9,6 +9,7 @@ import Scenarios from "./pages/Scenarios";
 import DSATree from "./pages/DSATree";
 import Theory from "./pages/Theory";
 import Help from "./pages/Help";
+import CodeEditor from "./pages/CodeEditor";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/scenarios" element={<Scenarios />} />
           <Route path="/dsa-tree" element={<DSATree />} />
+          <Route path="/code-editor" element={<CodeEditor />} />
           <Route path="/theory" element={<Theory />} />
           <Route path="/help" element={<Help />} />
           <Route path="*" element={<NotFound />} />
