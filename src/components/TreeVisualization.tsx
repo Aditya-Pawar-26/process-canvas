@@ -1,6 +1,6 @@
 import { ProcessNode } from '@/types/process';
 import { ProcessNodeCard } from './ProcessNodeCard';
-import { useEffect, useRef, useState } from 'react';
+import { useMemo } from 'react';
 
 interface TreeVisualizationProps {
   root: ProcessNode | null;
@@ -18,6 +18,11 @@ interface NodePosition {
   y: number;
 }
 
+const NODE_WIDTH = 130;
+const NODE_HEIGHT = 90;
+const HORIZONTAL_SPACING = 40;
+const VERTICAL_SPACING = 80;
+
 export const TreeVisualization = ({
   root,
   selectedNode,
@@ -27,79 +32,98 @@ export const TreeVisualization = ({
   onWait,
   onExit,
 }: TreeVisualizationProps) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [positions, setPositions] = useState<NodePosition[]>([]);
 
-  const NODE_WIDTH = 130;
-  const NODE_HEIGHT = 90;
-  const HORIZONTAL_SPACING = 40;
-  const VERTICAL_SPACING = 80;
+  // Calculate positions using Reingold-Tilford style algorithm
+  const positions = useMemo(() => {
+    if (!root) return [];
 
-  useEffect(() => {
-    if (!root) {
-      setPositions([]);
-      return;
+    // First pass: calculate subtree widths
+    const subtreeWidths = new Map<string, number>();
+    
+    function calculateSubtreeWidth(node: ProcessNode): number {
+      if (node.children.length === 0) {
+        subtreeWidths.set(node.id, NODE_WIDTH);
+        return NODE_WIDTH;
+      }
+      
+      const childrenWidth = node.children.reduce((sum, child, index) => {
+        const width = calculateSubtreeWidth(child);
+        return sum + width + (index > 0 ? HORIZONTAL_SPACING : 0);
+      }, 0);
+      
+      const totalWidth = Math.max(NODE_WIDTH, childrenWidth);
+      subtreeWidths.set(node.id, totalWidth);
+      return totalWidth;
     }
-
-    const calculatePositions = (
+    
+    calculateSubtreeWidth(root);
+    
+    // Second pass: assign positions
+    const positionList: NodePosition[] = [];
+    
+    function assignPositions(
       node: ProcessNode,
       depth: number,
       leftBound: number
-    ): { positions: NodePosition[]; width: number } => {
+    ): number {
+      const subtreeWidth = subtreeWidths.get(node.id) || NODE_WIDTH;
+      const y = depth * (NODE_HEIGHT + VERTICAL_SPACING);
+      
       if (node.children.length === 0) {
-        return {
-          positions: [{ node, x: leftBound, y: depth * (NODE_HEIGHT + VERTICAL_SPACING) }],
-          width: NODE_WIDTH,
-        };
+        positionList.push({ node, x: leftBound, y });
+        return subtreeWidth;
       }
-
-      let childPositions: NodePosition[] = [];
+      
+      // Position children first
       let currentLeft = leftBound;
-      let totalWidth = 0;
-
+      const childPositions: { x: number; width: number }[] = [];
+      
       for (const child of node.children) {
-        const result = calculatePositions(child, depth + 1, currentLeft);
-        childPositions = [...childPositions, ...result.positions];
-        currentLeft += result.width + HORIZONTAL_SPACING;
-        totalWidth += result.width + HORIZONTAL_SPACING;
+        const childWidth = assignPositions(child, depth + 1, currentLeft);
+        const childPos = positionList.find(p => p.node.id === child.id);
+        if (childPos) {
+          childPositions.push({ x: childPos.x, width: childWidth });
+        }
+        currentLeft += childWidth + HORIZONTAL_SPACING;
       }
-
-      totalWidth -= HORIZONTAL_SPACING;
-
-      const nodeX = leftBound + totalWidth / 2 - NODE_WIDTH / 2;
-      const nodeY = depth * (NODE_HEIGHT + VERTICAL_SPACING);
-
-      return {
-        positions: [{ node, x: nodeX, y: nodeY }, ...childPositions],
-        width: Math.max(totalWidth, NODE_WIDTH),
-      };
-    };
-
-    const result = calculatePositions(root, 0, 50);
-    setPositions(result.positions);
+      
+      // Center parent over children
+      if (childPositions.length > 0) {
+        const firstChild = childPositions[0];
+        const lastChild = childPositions[childPositions.length - 1];
+        const childSpanCenter = (firstChild.x + lastChild.x + NODE_WIDTH) / 2;
+        const nodeX = childSpanCenter - NODE_WIDTH / 2;
+        positionList.push({ node, x: nodeX, y });
+      } else {
+        positionList.push({ node, x: leftBound + subtreeWidth / 2 - NODE_WIDTH / 2, y });
+      }
+      
+      return subtreeWidth;
+    }
+    
+    assignPositions(root, 0, 50);
+    
+    return positionList;
   }, [root]);
 
-  const getEdges = () => {
-    if (!root) return [];
+  // Calculate edges
+  const edges = useMemo(() => {
+    if (!root || positions.length === 0) return [];
     
-    const edges: { from: NodePosition; to: NodePosition }[] = [];
+    const edgeList: { from: NodePosition; to: NodePosition }[] = [];
+    const positionMap = new Map(positions.map(p => [p.node.id, p]));
     
-    const traverse = (node: ProcessNode) => {
-      const parentPos = positions.find(p => p.node.id === node.id);
-      if (!parentPos) return;
-
-      for (const child of node.children) {
-        const childPos = positions.find(p => p.node.id === child.id);
+    for (const pos of positions) {
+      for (const child of pos.node.children) {
+        const childPos = positionMap.get(child.id);
         if (childPos) {
-          edges.push({ from: parentPos, to: childPos });
+          edgeList.push({ from: pos, to: childPos });
         }
-        traverse(child);
       }
-    };
-
-    traverse(root);
-    return edges;
-  };
+    }
+    
+    return edgeList;
+  }, [root, positions]);
 
   if (!root) {
     return (
@@ -112,40 +136,39 @@ export const TreeVisualization = ({
     );
   }
 
-  const edges = getEdges();
-  const maxX = Math.max(...positions.map(p => p.x)) + NODE_WIDTH + 50;
-  const maxY = Math.max(...positions.map(p => p.y)) + NODE_HEIGHT + 50;
+  const maxX = positions.length > 0 ? Math.max(...positions.map(p => p.x)) + NODE_WIDTH + 50 : 400;
+  const maxY = positions.length > 0 ? Math.max(...positions.map(p => p.y)) + NODE_HEIGHT + 50 : 300;
 
   return (
-    <div 
-      ref={containerRef}
-      className="relative w-full h-full overflow-auto"
-    >
+    <div className="relative w-full h-full overflow-auto">
       <div 
         className="relative"
         style={{ minWidth: maxX, minHeight: maxY }}
       >
-        {/* SVG for edges */}
+        {/* SVG for edges - center to center connections */}
         <svg 
           className="absolute inset-0 pointer-events-none"
           style={{ width: maxX, height: maxY }}
         >
           {edges.map((edge, i) => {
+            // Calculate center points
             const x1 = edge.from.x + NODE_WIDTH / 2;
             const y1 = edge.from.y + NODE_HEIGHT;
             const x2 = edge.to.x + NODE_WIDTH / 2;
             const y2 = edge.to.y;
 
+            // Smooth bezier curve from bottom-center of parent to top-center of child
+            const midY = (y1 + y2) / 2;
+
             return (
               <path
                 key={i}
-                d={`M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`}
+                d={`M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`}
                 fill="none"
                 stroke="hsl(var(--primary))"
                 strokeWidth="2"
-                strokeOpacity="0.5"
-                className="animate-draw-line"
-                style={{ strokeDasharray: 1000, strokeDashoffset: 0 }}
+                strokeOpacity="0.6"
+                className="transition-all duration-300"
               />
             );
           })}
