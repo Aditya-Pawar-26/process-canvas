@@ -7,12 +7,13 @@ export interface ParsedProcess {
   state: 'running' | 'waiting' | 'zombie' | 'orphan' | 'terminated';
   children: ParsedProcess[];
   depth: number;
+  forkLevel: number;
 }
 
 export interface ExecutionStep {
   lineNumber: number;
   code: string;
-  action: 'fork' | 'wait' | 'exit' | 'sleep' | 'print' | 'if' | 'else' | 'start' | 'end';
+  action: 'fork' | 'wait' | 'exit' | 'sleep' | 'print' | 'parent_exit' | 'start' | 'end' | 'info';
   description: string;
   osExplanation: string;
 }
@@ -26,46 +27,50 @@ export const useCodeParser = () => {
   const [executionSteps, setExecutionSteps] = useState<ExecutionStep[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   const [logs, setLogs] = useState<string[]>([]);
+  const [forkLevel, setForkLevel] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   const parseCode = useCallback((code: string): ExecutionStep[] => {
     const lines = code.split('\n');
     const steps: ExecutionStep[] = [];
+    
+    // Count fork() calls to understand exponential growth
+    let forkCalls = 0;
     
     lines.forEach((line, index) => {
       const trimmed = line.trim();
       const lineNum = index + 1;
       
       if (trimmed.includes('fork()')) {
+        forkCalls++;
         steps.push({
           lineNumber: lineNum,
           code: trimmed,
           action: 'fork',
-          description: 'Creating child process via fork()',
-          osExplanation: 'fork() duplicates the current process. Returns 0 to child, child PID to parent.'
+          description: `fork() #${forkCalls}: Each running process creates one child`,
+          osExplanation: `fork() duplicates ALL ${Math.pow(2, forkCalls - 1)} running processes. After this: ${Math.pow(2, forkCalls)} total processes. Returns: 0 to child, child_pid to parent.`
         });
       } else if (trimmed.includes('wait(') || trimmed.includes('waitpid(')) {
         steps.push({
           lineNumber: lineNum,
           code: trimmed,
           action: 'wait',
-          description: 'Parent waiting for child',
-          osExplanation: 'wait() suspends parent until a child terminates and returns its exit status.'
+          description: 'Parent waits for any child to terminate',
+          osExplanation: 'wait() blocks parent until a child exits. Reaps zombie processes. Without wait(), terminated children become zombies.'
         });
-      } else if (trimmed.includes('exit(')) {
+      } else if (trimmed.match(/exit\s*\(\s*0\s*\)/)) {
+        // Check context - is this in child or parent branch?
+        const prevLines = lines.slice(0, index).join('\n');
+        const isChildExit = prevLines.includes('pid == 0') || prevLines.includes('pid==0');
+        
         steps.push({
           lineNumber: lineNum,
           code: trimmed,
           action: 'exit',
-          description: 'Process terminating',
-          osExplanation: 'exit() terminates the process. If parent hasn\'t called wait(), child becomes zombie.'
-        });
-      } else if (trimmed.includes('sleep(')) {
-        steps.push({
-          lineNumber: lineNum,
-          code: trimmed,
-          action: 'sleep',
-          description: 'Process sleeping',
-          osExplanation: 'sleep() suspends execution for specified seconds.'
+          description: isChildExit ? 'Child process exits' : 'Process exits',
+          osExplanation: isChildExit 
+            ? 'Child calls exit(). If parent hasn\'t called wait(), child becomes ZOMBIE.'
+            : 'Process terminates. Running children become ORPHANS (adopted by init PID 1).'
         });
       } else if (trimmed.includes('printf') || trimmed.includes('print')) {
         steps.push({
@@ -73,39 +78,15 @@ export const useCodeParser = () => {
           code: trimmed,
           action: 'print',
           description: 'Output to console',
-          osExplanation: 'Standard output from process.'
-        });
-      } else if (trimmed.startsWith('if') && trimmed.includes('pid')) {
-        steps.push({
-          lineNumber: lineNum,
-          code: trimmed,
-          action: 'if',
-          description: 'Checking process context',
-          osExplanation: 'After fork(), checking if we\'re in child (pid==0) or parent (pid>0).'
-        });
-      } else if (trimmed === '} else {' || trimmed.startsWith('} else')) {
-        steps.push({
-          lineNumber: lineNum,
-          code: trimmed,
-          action: 'else',
-          description: 'Switching to other branch',
-          osExplanation: 'Entering the other branch of the fork condition.'
+          osExplanation: 'All processes (parent and children) may execute this line. Order is non-deterministic.'
         });
       } else if (trimmed.includes('int main()') || trimmed.includes('main()')) {
         steps.push({
           lineNumber: lineNum,
           code: trimmed,
           action: 'start',
-          description: 'Program starts',
-          osExplanation: 'Initial process (like init) begins execution.'
-        });
-      } else if (trimmed === 'return 0;' || trimmed === '}' && lines.slice(index + 1).every(l => l.trim() === '')) {
-        steps.push({
-          lineNumber: lineNum,
-          code: trimmed,
-          action: 'end',
-          description: 'Process ends',
-          osExplanation: 'Process completes and resources are released.'
+          description: 'Program starts with one process',
+          osExplanation: 'Initial process begins execution. This is like init spawning a new process.'
         });
       }
     });
@@ -115,7 +96,16 @@ export const useCodeParser = () => {
 
   const initializeExecution = useCallback((code: string) => {
     pidCounter = 1000;
+    setForkLevel(0);
+    setError(null);
+    
     const steps = parseCode(code);
+    
+    if (steps.length === 0) {
+      setError('No executable statements found. Use fork(), wait(), or exit().');
+      return steps;
+    }
+    
     setExecutionSteps(steps);
     setCurrentStepIndex(-1);
     setLogs([]);
@@ -127,12 +117,26 @@ export const useCodeParser = () => {
       ppid: 1,
       state: 'running',
       children: [],
-      depth: 0
+      depth: 0,
+      forkLevel: 0
     };
     setProcesses([rootProcess]);
+    setLogs(['$ Program started with PID 1001']);
     
     return steps;
   }, [parseCode]);
+
+  // Collect all running processes recursively
+  const collectRunning = (procs: ParsedProcess[]): ParsedProcess[] => {
+    let result: ParsedProcess[] = [];
+    for (const p of procs) {
+      if (p.state === 'running') {
+        result.push(p);
+      }
+      result = result.concat(collectRunning(p.children));
+    }
+    return result;
+  };
 
   const executeStep = useCallback(() => {
     if (currentStepIndex >= executionSteps.length - 1) return null;
@@ -143,85 +147,134 @@ export const useCodeParser = () => {
     setCurrentStepIndex(nextIndex);
     
     setProcesses(prev => {
-      const newProcesses = JSON.parse(JSON.stringify(prev)) as ParsedProcess[];
+      // Deep clone
+      const cloneProcess = (p: ParsedProcess): ParsedProcess => ({
+        ...p,
+        children: p.children.map(cloneProcess)
+      });
+      const newProcesses = prev.map(cloneProcess);
       
       if (step.action === 'fork') {
-        // Find running process to fork from
-        const findRunning = (procs: ParsedProcess[]): ParsedProcess | null => {
+        // CORRECT FORK: Duplicate ALL running processes
+        const running = collectRunning(newProcesses);
+        const newLevel = forkLevel + 1;
+        setForkLevel(newLevel);
+        
+        const addChildToParent = (procs: ParsedProcess[], parentPid: number, child: ParsedProcess): boolean => {
           for (const p of procs) {
-            if (p.state === 'running') return p;
-            const found = findRunning(p.children);
-            if (found) return found;
+            if (p.pid === parentPid) {
+              p.children.push(child);
+              return true;
+            }
+            if (addChildToParent(p.children, parentPid, child)) return true;
           }
-          return null;
+          return false;
         };
         
-        const parent = findRunning(newProcesses);
-        if (parent) {
+        const newPids: number[] = [];
+        for (const parent of running) {
           const childPid = generatePid();
+          newPids.push(childPid);
           const child: ParsedProcess = {
             id: `process-${childPid}`,
             pid: childPid,
             ppid: parent.pid,
             state: 'running',
             children: [],
-            depth: parent.depth + 1
+            depth: parent.depth + 1,
+            forkLevel: newLevel
           };
-          parent.children.push(child);
-          setLogs(l => [...l, `fork() → Child PID ${childPid} created`]);
+          addChildToParent(newProcesses, parent.pid, child);
         }
+        
+        setLogs(l => [
+          ...l, 
+          `$ fork() → ${running.length} processes each created 1 child`,
+          `$ New PIDs: ${newPids.join(', ')}`,
+          `$ Total running: ${running.length + newPids.length} (2^${newLevel} = ${Math.pow(2, newLevel)})`,
+          `$ ⚠️ Execution order is scheduler-dependent`
+        ]);
+        
       } else if (step.action === 'wait') {
-        // Find running process with children
-        const findWithChildren = (procs: ParsedProcess[]): ParsedProcess | null => {
+        // Find a parent with children
+        const findParentWithChildren = (procs: ParsedProcess[]): ParsedProcess | null => {
           for (const p of procs) {
-            if (p.state === 'running' && p.children.length > 0) return p;
-            const found = findWithChildren(p.children);
-            if (found) return found;
-          }
-          return null;
-        };
-        
-        const parent = findWithChildren(newProcesses);
-        if (parent) {
-          parent.state = 'waiting';
-          setLogs(l => [...l, `wait() → PID ${parent.pid} waiting for children`]);
-        }
-      } else if (step.action === 'exit') {
-        // Find a child process that's running
-        const findChild = (procs: ParsedProcess[]): ParsedProcess | null => {
-          for (const p of procs) {
-            for (const child of p.children) {
-              if (child.state === 'running' && child.children.length === 0) {
-                return child;
-              }
+            if (p.state === 'running' && p.children.length > 0) {
+              // Check for zombie children first
+              const zombie = p.children.find(c => c.state === 'zombie');
+              if (zombie) return p;
+              // Then running children
+              const running = p.children.find(c => c.state === 'running');
+              if (running) return p;
             }
-            const found = findChild(p.children);
+            const found = findParentWithChildren(p.children);
             if (found) return found;
           }
           return null;
         };
         
-        // Also find parent that might be waiting
-        const findParent = (procs: ParsedProcess[], ppid: number): ParsedProcess | null => {
-          for (const p of procs) {
-            if (p.pid === ppid) return p;
-            const found = findParent(p.children, ppid);
-            if (found) return found;
-          }
-          return null;
-        };
-        
-        const child = findChild(newProcesses);
-        if (child) {
-          const parent = findParent(newProcesses, child.ppid);
-          if (parent?.state === 'waiting') {
-            child.state = 'terminated';
-            parent.state = 'running';
-            setLogs(l => [...l, `exit() → PID ${child.pid} terminated normally`]);
+        const parent = findParentWithChildren(newProcesses);
+        if (parent) {
+          const zombie = parent.children.find(c => c.state === 'zombie');
+          if (zombie) {
+            zombie.state = 'terminated';
+            setLogs(l => [...l, `$ wait() by PID ${parent.pid} → Reaped zombie PID ${zombie.pid}`]);
           } else {
-            child.state = 'zombie';
-            setLogs(l => [...l, `exit() → PID ${child.pid} became ZOMBIE`]);
+            parent.state = 'waiting';
+            setLogs(l => [...l, `$ wait() by PID ${parent.pid} → Blocking until child exits`]);
           }
+        }
+        
+      } else if (step.action === 'exit') {
+        // Find a leaf process to exit
+        const findExitCandidate = (procs: ParsedProcess[]): { proc: ParsedProcess, parent: ParsedProcess | null } | null => {
+          for (const p of procs) {
+            // Check children first (DFS)
+            for (const child of p.children) {
+              if (child.state === 'running' && child.children.filter(c => c.state === 'running').length === 0) {
+                return { proc: child, parent: p };
+              }
+              const found = findExitCandidate([child]);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        
+        const candidate = findExitCandidate(newProcesses);
+        if (candidate) {
+          const { proc, parent } = candidate;
+          
+          if (parent?.state === 'waiting') {
+            proc.state = 'terminated';
+            parent.state = 'running';
+            setLogs(l => [...l, `$ exit(0) by PID ${proc.pid} → Terminated (parent was waiting)`]);
+          } else {
+            proc.state = 'zombie';
+            setLogs(l => [
+              ...l, 
+              `$ exit(0) by PID ${proc.pid} → Became ZOMBIE`,
+              `$ 💀 Zombie: Exit status not collected by parent`
+            ]);
+          }
+        }
+        
+      } else if (step.action === 'parent_exit') {
+        // Parent exits, orphaning children
+        const root = newProcesses[0];
+        if (root && root.children.length > 0) {
+          root.state = 'terminated';
+          root.children.forEach(child => {
+            if (child.state === 'running') {
+              child.state = 'orphan';
+              child.ppid = 1;
+            }
+          });
+          setLogs(l => [
+            ...l, 
+            `$ Parent PID ${root.pid} exited`,
+            `$ Children become ORPHAN → Adopted by init (PID 1)`
+          ]);
         }
       }
       
@@ -229,7 +282,7 @@ export const useCodeParser = () => {
     });
     
     return step;
-  }, [currentStepIndex, executionSteps]);
+  }, [currentStepIndex, executionSteps, forkLevel]);
 
   const reset = useCallback(() => {
     pidCounter = 1000;
@@ -237,6 +290,8 @@ export const useCodeParser = () => {
     setExecutionSteps([]);
     setCurrentStepIndex(-1);
     setLogs([]);
+    setForkLevel(0);
+    setError(null);
   }, []);
 
   const getCurrentStep = useCallback(() => {
@@ -251,6 +306,8 @@ export const useCodeParser = () => {
     executionSteps,
     currentStepIndex,
     logs,
+    error,
+    forkLevel,
     parseCode,
     initializeExecution,
     executeStep,

@@ -7,19 +7,23 @@ import { ConsoleLog } from '@/components/ConsoleLog';
 import { useProcessTree } from '@/hooks/useProcessTree';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { RotateCcw, Footprints } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { RotateCcw, Footprints, AlertTriangle } from 'lucide-react';
 
 const Dashboard = () => {
   const {
     root,
     logs,
     selectedNode,
+    forkCount,
     setSelectedNode,
     createRootProcess,
     forkProcess,
+    forkAllProcesses,
     waitProcess,
     exitProcess,
     resetTree,
+    getAllRunningProcesses,
   } = useProcessTree();
 
   const [forkDepth, setForkDepth] = useState(3);
@@ -29,35 +33,50 @@ const Dashboard = () => {
   const [osExplanation, setOsExplanation] = useState<string>();
   const [dsaExplanation, setDsaExplanation] = useState<string>();
 
+  const runningCount = root ? getAllRunningProcesses(root).length : 0;
+
   const handleFork = useCallback(() => {
     if (!root) {
       createRootProcess();
-      setLastAction('Created root process');
-      setOsExplanation('The init process (PID 1) is the first process started by the kernel');
-      setDsaExplanation('Root node of the tree created');
-    } else if (selectedNode) {
-      forkProcess(selectedNode.pid);
-      setLastAction(`fork() called on PID ${selectedNode.pid}`);
-      setOsExplanation('fork() creates a new child process with a unique PID');
-      setDsaExplanation('New child node added to the selected parent node');
+      setLastAction('Created root process (PID 1001)');
+      setOsExplanation('The first user process is created. init (PID 1) already exists to adopt orphans.');
+      setDsaExplanation('Root node of the process tree created. This is the ancestor of all child processes.');
+    } else {
+      // CORRECT: Fork ALL running processes
+      const newChildren = forkAllProcesses();
+      const expectedTotal = Math.pow(2, forkCount + 1);
+      setLastAction(`fork() called - ${newChildren.length} new processes created`);
+      setOsExplanation(
+        `fork() duplicates EVERY running process. Before: ${runningCount} processes. After: ${runningCount + newChildren.length} processes (expected: 2^${forkCount + 1} = ${expectedTotal}). Returns 0 to child, child_pid to parent.`
+      );
+      setDsaExplanation(
+        `Each node at the current level spawns one child. Tree depth increases. This is exponential growth: n sequential forks create 2^n processes.`
+      );
     }
-  }, [root, selectedNode, createRootProcess, forkProcess]);
+  }, [root, forkCount, runningCount, createRootProcess, forkAllProcesses]);
+
 
   const handleWait = useCallback(() => {
     if (selectedNode) {
       waitProcess(selectedNode.pid);
-      setLastAction(`wait() called on PID ${selectedNode.pid}`);
-      setOsExplanation('Parent blocks until one of its children terminates');
-      setDsaExplanation('Similar to postorder traversal - children processed before parent continues');
+      setLastAction(`wait() called by PID ${selectedNode.pid}`);
+      setOsExplanation('wait() blocks the parent until a child terminates. If child already exited (zombie), it reaps it immediately. Prevents zombie accumulation.');
+      setDsaExplanation('Postorder traversal pattern: children must complete before parent continues. Parent waits at this node.');
     }
   }, [selectedNode, waitProcess]);
 
   const handleExit = useCallback(() => {
     if (selectedNode) {
+      const hasChildren = selectedNode.children.some(c => c.state === 'running');
       exitProcess(selectedNode.pid);
-      setLastAction(`exit() called on PID ${selectedNode.pid}`);
-      setOsExplanation('Process terminates and releases resources');
-      setDsaExplanation('Node marked for removal from tree structure');
+      setLastAction(`exit() called by PID ${selectedNode.pid}`);
+      if (hasChildren) {
+        setOsExplanation('Process exited with running children → children become ORPHANS. They are re-parented to init (PID 1) which will eventually wait() for them.');
+        setDsaExplanation('Deleting an internal node: children must be moved to another parent (init). Maintains tree integrity.');
+      } else {
+        setOsExplanation('Process exited. If parent was waiting → normal termination. If parent NOT waiting → becomes ZOMBIE until parent calls wait().');
+        setDsaExplanation('Leaf node removal. Node state changes but structure preserved until parent acknowledges.');
+      }
     }
   }, [selectedNode, exitProcess]);
 
@@ -94,10 +113,29 @@ const Dashboard = () => {
                 <Footprints className="w-4 h-4" /> Step Mode
               </span>
             </div>
+            {root && (
+              <div className="flex items-center gap-3">
+                <Badge variant="outline" className="font-mono">
+                  Fork #{forkCount}
+                </Badge>
+                <Badge variant="secondary" className="font-mono">
+                  Running: {runningCount}
+                </Badge>
+                <Badge variant="secondary" className="font-mono">
+                  Expected: 2^{forkCount} = {Math.pow(2, forkCount)}
+                </Badge>
+              </div>
+            )}
           </div>
-          <Button variant="ghost" size="sm" onClick={resetTree} className="gap-2">
-            <RotateCcw className="w-4 h-4" /> Reset
-          </Button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted/50 px-2 py-1 rounded">
+              <AlertTriangle className="w-3 h-3 text-yellow-500" />
+              Execution order is scheduler-dependent
+            </div>
+            <Button variant="ghost" size="sm" onClick={resetTree} className="gap-2">
+              <RotateCcw className="w-4 h-4" /> Reset
+            </Button>
+          </div>
         </div>
       </div>
 
