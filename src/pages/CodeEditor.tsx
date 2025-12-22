@@ -9,106 +9,99 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Play, RotateCcw, Pause, SkipForward, Code, Terminal, Info, Skull, UserX } from 'lucide-react';
 import { useCodeSimulator, SimProcess } from '@/hooks/useCodeSimulator';
 
-// Each template has DISTINCT code that produces DIFFERENT OS outcomes
+// Each template has DISTINCT code that produces DIFFERENT OS outcomes.
+// Notes on presets:
+// - We still parse ONLY fork()/wait()/exit()/sleep().
+// - Presets can add simple execution hints via inline comments:
+//     exit(0); // child   → only non-root processes execute this line
+//     wait(NULL); // parent → only the root/ppid=1 process executes this line
 const codeTemplates = [
   {
     id: 'single-fork',
     name: 'Single Fork',
-    description: 'Just fork - both processes run (no zombie/orphan)',
-    code: `#include <stdio.h>
-#include <unistd.h>
+    description: 'Just fork - both processes keep running (no zombie/orphan)',
+    code: `#include <unistd.h>
 
 int main() {
     fork();
-    // Both parent and child reach here
-    // No exit() or wait() - all running
-}`
+    // No exit() or wait()
+}`,
   },
   {
     id: 'fork-wait-clean',
     name: 'Fork + Wait (Clean)',
-    description: 'Parent waits for child - no zombie',
-    code: `#include <stdio.h>
+    description: 'Child exits; parent waits & reaps → no zombie, no orphan',
+    code: `#include <sys/wait.h>
 #include <unistd.h>
-#include <sys/wait.h>
 
 int main() {
     fork();
-    // Child exits first
-    exit(0);
-}`
+    exit(0);      // child
+    wait(NULL);   // parent
+}`,
   },
   {
     id: 'zombie-demo',
     name: 'Zombie Process',
-    description: 'Child exits, parent does NOT wait → zombie',
-    code: `#include <stdio.h>
-#include <unistd.h>
+    description: 'Child exits; parent does NOT wait → zombie persists',
+    code: `#include <unistd.h>
 
 int main() {
     fork();
-    sleep(1);
-    // Only child exits - parent keeps running
-    // Child becomes zombie (parent not waiting)
-}`
+    exit(0);  // child
+    // parent continues running and never calls wait()
+    sleep(1); // parent (ignored as hint; just a step)
+}`,
   },
   {
     id: 'orphan-demo',
     name: 'Orphan Process',
-    description: 'Parent exits first → child becomes orphan',
-    code: `#include <stdio.h>
-#include <unistd.h>
+    description: 'Parent exits first → child becomes orphan (adopted by init)',
+    code: `#include <unistd.h>
 
 int main() {
     fork();
-    // Parent exits immediately
-    exit(0);
-    // Child continues - becomes orphan (PPID=1)
-}`
+    exit(0);   // parent
+    sleep(1);  // child (continues running)
+}`,
   },
   {
     id: 'proper-cleanup',
     name: 'Proper Cleanup',
     description: 'fork → child exit → parent wait → clean',
-    code: `#include <stdio.h>
+    code: `#include <sys/wait.h>
 #include <unistd.h>
-#include <sys/wait.h>
 
 int main() {
     fork();
-    sleep(1);
-    wait(NULL);
-    // Parent waits, reaps child - no zombie
-}`
+    sleep(1);   // child reaches exit first
+    exit(0);    // child
+    wait(NULL); // parent
+}`,
   },
   {
     id: 'double-fork',
     name: 'Double Fork',
     description: 'Two forks → 4 running processes (no zombie/orphan)',
-    code: `#include <stdio.h>
-#include <unistd.h>
+    code: `#include <unistd.h>
 
 int main() {
     fork();
     fork();
-    // 4 processes all running
-    // No exit() - no zombie or orphan
-}`
+}`,
   },
   {
     id: 'triple-fork',
     name: 'Triple Fork',
-    description: 'Three forks → 8 running processes',
-    code: `#include <stdio.h>
-#include <unistd.h>
+    description: 'Three forks → 8 running processes (no zombie/orphan)',
+    code: `#include <unistd.h>
 
 int main() {
     fork();
     fork();
     fork();
-    // 8 processes all running
-}`
-  }
+}`,
+  },
 ];
 
 export default function CodeEditor() {
