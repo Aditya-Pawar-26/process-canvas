@@ -8,6 +8,7 @@ export interface ProcessNode {
   children: ProcessNode[];
   createdAt: number;
   depth: number;
+  forkLevel: number; // Indicates which fork() call created this process
   isOrphan?: boolean;
 }
 
@@ -31,7 +32,7 @@ export interface Scenario {
 }
 
 export interface ScenarioStep {
-  action: 'fork' | 'wait' | 'exit' | 'orphan';
+  action: 'fork' | 'wait' | 'exit' | 'orphan' | 'explain';
   targetPid?: number;
   description: string;
   osExplanation: string;

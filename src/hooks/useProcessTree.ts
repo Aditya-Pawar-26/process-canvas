@@ -12,6 +12,7 @@ export const useProcessTree = () => {
   const [initProcess, setInitProcess] = useState<ProcessNode | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
+  const [forkCount, setForkCount] = useState(0);
 
   const addLog = useCallback((type: LogEntry['type'], message: string, pid?: number) => {
     const entry: LogEntry = {
@@ -26,37 +27,51 @@ export const useProcessTree = () => {
 
   const createRootProcess = useCallback(() => {
     pidCounter = 1000;
+    setForkCount(0);
     
     // Create init process (PID 1)
-    const initNode: ProcessNode = {
-      id: 'process-1',
-      pid: 1,
-      ppid: 0,
-      state: 'running',
-      children: [],
-      createdAt: Date.now(),
-      depth: 0,
-    };
-    
-    // Create user root process
     const rootNode: ProcessNode = {
-      id: `process-${generatePid()}`,
+      id: `process-1001`,
       pid: 1001,
       ppid: 1,
       state: 'running',
       children: [],
       createdAt: Date.now(),
-      depth: 1,
+      depth: 0,
+      forkLevel: 0,
     };
     
-    initNode.children = [rootNode];
+    const initNode: ProcessNode = {
+      id: 'process-1',
+      pid: 1,
+      ppid: 0,
+      state: 'running',
+      children: [rootNode],
+      createdAt: Date.now(),
+      depth: -1,
+      forkLevel: -1,
+    };
+    
     setInitProcess(initNode);
     setRoot(rootNode);
     setLogs([]);
-    addLog('info', 'Init process (PID 1) exists', 1);
-    addLog('info', 'Root process created', rootNode.pid);
+    addLog('info', 'Init process (PID 1) exists - adopts orphan processes', 1);
+    addLog('success', `Root process created with PID 1001`, 1001);
     return rootNode;
   }, [addLog]);
+
+  // Collect ALL running processes in the tree (flat list)
+  const getAllRunningProcesses = useCallback((node: ProcessNode | null): ProcessNode[] => {
+    if (!node) return [];
+    const result: ProcessNode[] = [];
+    if (node.state === 'running') {
+      result.push(node);
+    }
+    for (const child of node.children) {
+      result.push(...getAllRunningProcesses(child));
+    }
+    return result;
+  }, []);
 
   const findNode = useCallback((node: ProcessNode | null, pid: number): ProcessNode | null => {
     if (!node) return null;
@@ -89,6 +104,81 @@ export const useProcessTree = () => {
     };
   }, []);
 
+  // CORRECT fork() semantics: fork duplicates ALL active processes
+  // Each running process creates one child
+  const forkAllProcesses = useCallback(() => {
+    if (!root) {
+      const newRoot = createRootProcess();
+      setSelectedNode(newRoot);
+      return [newRoot];
+    }
+
+    const newForkLevel = forkCount + 1;
+    setForkCount(newForkLevel);
+
+    // Get all currently running processes
+    const runningProcesses = getAllRunningProcesses(root);
+    const newChildren: ProcessNode[] = [];
+
+    addLog('info', `fork() called - duplicating ${runningProcesses.length} running process(es)`, undefined);
+    addLog('info', `⚠️ Execution order is scheduler-dependent (non-deterministic)`, undefined);
+
+    // Create one child for each running process
+    const createChildren = (tree: ProcessNode): ProcessNode => {
+      if (tree.state !== 'running') {
+        return {
+          ...tree,
+          children: tree.children.map(c => createChildren(c)),
+        };
+      }
+
+      const childPid = generatePid();
+      const childNode: ProcessNode = {
+        id: `process-${childPid}`,
+        pid: childPid,
+        ppid: tree.pid,
+        state: 'running',
+        children: [],
+        createdAt: Date.now(),
+        depth: tree.depth + 1,
+        forkLevel: newForkLevel,
+      };
+      newChildren.push(childNode);
+
+      return {
+        ...tree,
+        children: [...tree.children.map(c => createChildren(c)), childNode],
+      };
+    };
+
+    const updatedRoot = createChildren(root);
+    setRoot(updatedRoot);
+
+    // Update init process if it exists
+    if (initProcess) {
+      setInitProcess(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          children: prev.children.map(c => {
+            if (c.pid === root.pid) return updatedRoot;
+            return c;
+          }),
+        };
+      });
+    }
+
+    // Log each new child
+    newChildren.forEach(child => {
+      addLog('success', `fork() → PID ${child.ppid} created child PID ${child.pid} (fork #${newForkLevel})`, child.pid);
+    });
+
+    addLog('info', `Total processes after fork #${newForkLevel}: ${runningProcesses.length + newChildren.length}`, undefined);
+
+    return newChildren;
+  }, [root, initProcess, forkCount, getAllRunningProcesses, createRootProcess, addLog]);
+
+  // Legacy single fork for specific parent (used in scenarios)
   const forkProcess = useCallback((parentPid: number) => {
     if (!root) {
       const newRoot = createRootProcess();
@@ -107,6 +197,9 @@ export const useProcessTree = () => {
       return null;
     }
 
+    const newForkLevel = forkCount + 1;
+    setForkCount(newForkLevel);
+
     const childPid = generatePid();
     const childNode: ProcessNode = {
       id: `process-${childPid}`,
@@ -116,29 +209,41 @@ export const useProcessTree = () => {
       children: [],
       createdAt: Date.now(),
       depth: parent.depth + 1,
+      forkLevel: newForkLevel,
     };
+
+    const updateTree = (node: ProcessNode): ProcessNode => {
+      if (node.pid === parentPid) {
+        return {
+          ...node,
+          children: [...node.children, childNode],
+        };
+      }
+      return {
+        ...node,
+        children: node.children.map(updateTree),
+      };
+    };
+
+    const updatedRoot = updateTree(root);
+    setRoot(updatedRoot);
 
     if (initProcess) {
       setInitProcess(prev => {
         if (!prev) return prev;
-        return updateNode(prev, parentPid, (n) => ({
-          ...n,
-          children: [...n.children, childNode],
-        }));
+        return {
+          ...prev,
+          children: prev.children.map(c => {
+            if (c.pid === root.pid) return updatedRoot;
+            return c;
+          }),
+        };
       });
     }
-    
-    setRoot(prev => {
-      if (!prev) return prev;
-      return updateNode(prev, parentPid, (n) => ({
-        ...n,
-        children: [...n.children, childNode],
-      }));
-    });
 
-    addLog('success', `fork() called by PID ${parentPid} → Child PID ${childPid} created`, childPid);
+    addLog('success', `fork() by PID ${parentPid} → returns ${childPid} to parent, 0 to child`, childPid);
     return childNode;
-  }, [root, initProcess, findInTree, updateNode, addLog, createRootProcess]);
+  }, [root, initProcess, forkCount, findInTree, addLog, createRootProcess]);
 
   const waitProcess = useCallback((parentPid: number) => {
     if (!root) return;
@@ -150,27 +255,65 @@ export const useProcessTree = () => {
     }
 
     const runningChildren = parent.children.filter(c => c.state === 'running');
-    if (runningChildren.length === 0) {
-      addLog('warning', `No running children to wait for`, parentPid);
+    const zombieChildren = parent.children.filter(c => c.state === 'zombie');
+
+    // If there are zombie children, reap them
+    if (zombieChildren.length > 0) {
+      const zombie = zombieChildren[0];
+      const updateTree = (node: ProcessNode): ProcessNode => {
+        if (node.pid === zombie.pid) {
+          return { ...node, state: 'terminated' as ProcessState };
+        }
+        return {
+          ...node,
+          children: node.children.map(updateTree),
+        };
+      };
+
+      const updatedRoot = updateTree(root);
+      setRoot(updatedRoot);
+
+      if (initProcess) {
+        setInitProcess(prev => prev ? {
+          ...prev,
+          children: prev.children.map(c => c.pid === root.pid ? updatedRoot : c),
+        } : prev);
+      }
+
+      addLog('success', `wait() by PID ${parentPid} → Reaped zombie PID ${zombie.pid}`, parentPid);
       return;
     }
 
-    const updateInTree = (tree: ProcessNode) => {
-      return updateNode(tree, parentPid, (n) => ({
-        ...n,
-        state: 'waiting' as ProcessState,
-      }));
+    if (runningChildren.length === 0) {
+      addLog('warning', `wait() by PID ${parentPid} → No children to wait for`, parentPid);
+      return;
+    }
+
+    // Set parent to waiting state
+    const updateTree = (node: ProcessNode): ProcessNode => {
+      if (node.pid === parentPid) {
+        return { ...node, state: 'waiting' as ProcessState };
+      }
+      return {
+        ...node,
+        children: node.children.map(updateTree),
+      };
     };
 
+    const updatedRoot = updateTree(root);
+    setRoot(updatedRoot);
+
     if (initProcess) {
-      setInitProcess(prev => prev ? updateInTree(prev) : prev);
+      setInitProcess(prev => prev ? {
+        ...prev,
+        children: prev.children.map(c => c.pid === root.pid ? updatedRoot : c),
+      } : prev);
     }
-    setRoot(prev => prev ? updateInTree(prev) : prev);
 
-    addLog('info', `wait() called by PID ${parentPid} → Waiting for children`, parentPid);
-  }, [root, initProcess, findInTree, updateNode, addLog]);
+    addLog('info', `wait() by PID ${parentPid} → Blocking until child terminates`, parentPid);
+  }, [root, initProcess, findInTree, addLog]);
 
-  const exitProcess = useCallback((pid: number, createOrphan: boolean = false) => {
+  const exitProcess = useCallback((pid: number) => {
     if (!root) return;
 
     const node = findInTree(pid);
@@ -179,126 +322,90 @@ export const useProcessTree = () => {
       return;
     }
 
-    // Check if this process has children - if so, they become orphans
-    if (node.children.length > 0 && !createOrphan) {
-      // Make children orphans - re-parent to init (PID 1)
-      const orphanChildren = node.children.filter(c => c.state === 'running');
-      
-      if (orphanChildren.length > 0) {
-        // Update children to be orphans
-        const updateChildren = (tree: ProcessNode): ProcessNode => {
-          if (tree.pid === pid) {
-            return {
-              ...tree,
-              children: tree.children.map(child => ({
-                ...child,
-                ppid: 1,
-                state: 'orphan' as ProcessState,
-                isOrphan: true,
-              })),
-            };
-          }
-          return {
-            ...tree,
-            children: tree.children.map(c => updateChildren(c)),
-          };
-        };
-
-        if (initProcess) {
-          setInitProcess(prev => {
-            if (!prev) return prev;
-            let updated = updateChildren(prev);
-            // Move orphan children to init
-            const orphans = node.children.map(c => ({
-              ...c,
-              ppid: 1,
-              state: 'orphan' as ProcessState,
-              isOrphan: true,
-              depth: 1,
-            }));
-            updated = {
-              ...updated,
-              children: [...updated.children.filter(c => c.pid !== pid), ...orphans],
-            };
-            return updated;
-          });
-        }
-
-        addLog('warning', `Parent PID ${pid} exiting → ${orphanChildren.length} children become ORPHAN`, pid);
-        orphanChildren.forEach(c => {
-          addLog('info', `PID ${c.pid} adopted by init (PID 1)`, c.pid);
-        });
-      }
+    // Handle orphan creation: if this process has running children
+    const runningChildren = node.children.filter(c => c.state === 'running');
+    if (runningChildren.length > 0) {
+      addLog('warning', `exit() by PID ${pid} → ${runningChildren.length} child(ren) become ORPHAN`, pid);
+      runningChildren.forEach(c => {
+        addLog('info', `PID ${c.pid} adopted by init (PID 1), PPID changes from ${c.ppid} to 1`, c.pid);
+      });
     }
 
+    // Find parent to check if it's waiting
     const parent = findInTree(node.ppid);
     const newState: ProcessState = parent?.state === 'waiting' ? 'terminated' : 'zombie';
 
-    const updateTree = (tree: ProcessNode): ProcessNode => {
-      let updated = updateNode(tree, pid, (n) => ({
-        ...n,
-        state: newState,
-        children: [], // Children already moved to init
-      }));
+    // Build the updated tree
+    const updateTree = (n: ProcessNode): ProcessNode => {
+      if (n.pid === pid) {
+        // Mark children as orphans and move them
+        const orphanedChildren = n.children.map(c => ({
+          ...c,
+          ppid: 1,
+          state: c.state === 'running' ? 'orphan' as ProcessState : c.state,
+          isOrphan: c.state === 'running',
+          depth: 1,
+          children: c.children,
+        }));
 
-      // If parent was waiting, set it back to running
-      if (parent?.state === 'waiting') {
-        const remainingRunning = parent.children.filter(
-          c => c.pid !== pid && c.state === 'running'
-        );
-        if (remainingRunning.length === 0) {
-          updated = updateNode(updated, parent.pid, (n) => ({
-            ...n,
-            state: 'running' as ProcessState,
-          }));
-        }
+        return {
+          ...n,
+          state: newState,
+          children: orphanedChildren.filter(c => c.state !== 'orphan'), // Remove orphans, they go to init
+        };
       }
-
-      return updated;
+      return {
+        ...n,
+        children: n.children.map(updateTree),
+      };
     };
 
-    if (initProcess) {
-      setInitProcess(prev => prev ? updateTree(prev) : prev);
-    }
-    setRoot(prev => prev ? updateTree(prev) : prev);
+    let updatedRoot = updateTree(root);
 
-    if (newState === 'zombie') {
-      addLog('warning', `exit() called by PID ${pid} → Became ZOMBIE (parent not waiting)`, pid);
+    // Move orphans to init
+    if (runningChildren.length > 0 && initProcess) {
+      const orphans = runningChildren.map(c => ({
+        ...c,
+        ppid: 1,
+        state: 'orphan' as ProcessState,
+        isOrphan: true,
+        depth: 1,
+      }));
+
+      setInitProcess(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          children: [...prev.children.filter(c => c.pid !== root.pid), updatedRoot, ...orphans],
+        };
+      });
+    } else if (initProcess) {
+      setInitProcess(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          children: prev.children.map(c => c.pid === root.pid ? updatedRoot : c),
+        };
+      });
+    }
+
+    // If parent was waiting, wake it up
+    if (parent?.state === 'waiting') {
+      const remainingRunning = parent.children.filter(c => c.pid !== pid && c.state === 'running');
+      if (remainingRunning.length === 0) {
+        updatedRoot = updateNode(updatedRoot, parent.pid, (p) => ({
+          ...p,
+          state: 'running' as ProcessState,
+        }));
+      }
+      addLog('success', `exit() by PID ${pid} → Terminated normally (parent was waiting)`, pid);
     } else {
-      addLog('success', `exit() called by PID ${pid} → Terminated normally`, pid);
+      addLog('warning', `exit() by PID ${pid} → Became ZOMBIE (parent not waiting)`, pid);
+      addLog('info', `💀 Zombie: Process finished but exit status not collected by parent`, pid);
     }
+
+    setRoot(updatedRoot);
   }, [root, initProcess, findInTree, updateNode, addLog]);
-
-  const killProcess = useCallback((pid: number) => {
-    if (!root) return;
-    if (root.pid === pid) {
-      setRoot(null);
-      setInitProcess(null);
-      setSelectedNode(null);
-      setLogs([]);
-      addLog('info', 'All processes terminated');
-      return;
-    }
-
-    const node = findInTree(pid);
-    if (!node) {
-      addLog('error', `Process ${pid} not found`);
-      return;
-    }
-
-    // Remove the node from its parent
-    const removeNode = (tree: ProcessNode): ProcessNode => ({
-      ...tree,
-      children: tree.children.filter(c => c.pid !== pid).map(removeNode),
-    });
-
-    if (initProcess) {
-      setInitProcess(prev => prev ? removeNode(prev) : prev);
-    }
-    setRoot(prev => prev ? removeNode(prev) : prev);
-
-    addLog('error', `Process ${pid} killed`, pid);
-  }, [root, initProcess, findInTree, addLog]);
 
   const resetTree = useCallback(() => {
     pidCounter = 1000;
@@ -307,6 +414,7 @@ export const useProcessTree = () => {
     setInitProcess(null);
     setSelectedNode(null);
     setLogs([]);
+    setForkCount(0);
   }, []);
 
   const getAllNodes = useCallback((node: ProcessNode | null): ProcessNode[] => {
@@ -319,15 +427,17 @@ export const useProcessTree = () => {
     initProcess,
     logs,
     selectedNode,
+    forkCount,
     setSelectedNode,
     createRootProcess,
     forkProcess,
+    forkAllProcesses, // NEW: Correct fork semantics
     waitProcess,
     exitProcess,
-    killProcess,
     resetTree,
     findNode: findInTree,
     getAllNodes,
+    getAllRunningProcesses,
     addLog,
   };
 };
