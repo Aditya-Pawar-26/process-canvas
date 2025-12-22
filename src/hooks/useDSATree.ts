@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { ProcessNode } from '@/types/process';
 
 export interface DSANode {
   id: string;
@@ -16,6 +17,7 @@ export interface NodeInfo {
   childrenCount: number;
   subtreeSize: number;
   isLeaf: boolean;
+  degree: number;
 }
 
 let nodeCounter = 0;
@@ -24,7 +26,7 @@ const generateNodeId = () => `node-${++nodeCounter}`;
 export const useDSATree = () => {
   const [root, setRoot] = useState<DSANode | null>(null);
   const [selectedNode, setSelectedNode] = useState<DSANode | null>(null);
-  const [maxDegree, setMaxDegree] = useState(3);
+  const [maxDegree, setMaxDegree] = useState(10); // Allow arbitrary degree
 
   const createRoot = useCallback((value: number) => {
     nodeCounter = 0;
@@ -150,7 +152,8 @@ export const useDSATree = () => {
       parent: parentNode?.value ?? null,
       childrenCount: node.children.length,
       subtreeSize: getSubtreeSize(node),
-      isLeaf: node.children.length === 0
+      isLeaf: node.children.length === 0,
+      degree: node.children.length
     };
   }, [root, findNode, getHeight, getSubtreeSize]);
 
@@ -213,6 +216,33 @@ export const useDSATree = () => {
     setSelectedNode(null);
   }, []);
 
+  // Import OS process tree as DSA tree
+  const importFromProcessTree = useCallback((processNode: ProcessNode) => {
+    nodeCounter = 0;
+    
+    const convertNode = (pNode: ProcessNode, depth: number, parentId: string | null): DSANode => {
+      const id = generateNodeId();
+      const dsaNode: DSANode = {
+        id,
+        value: pNode.pid,
+        children: [],
+        depth,
+        parentId,
+      };
+      
+      dsaNode.children = pNode.children.map(child =>
+        convertNode(child, depth + 1, id)
+      );
+      
+      return dsaNode;
+    };
+    
+    const newRoot = convertNode(processNode, 0, null);
+    setRoot(newRoot);
+    setSelectedNode(newRoot);
+    return newRoot;
+  }, []);
+
   return {
     root,
     selectedNode,
@@ -230,6 +260,7 @@ export const useDSATree = () => {
     postorder,
     levelOrder,
     inorder,
-    reset
+    reset,
+    importFromProcessTree
   };
 };
