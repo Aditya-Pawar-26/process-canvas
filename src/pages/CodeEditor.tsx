@@ -5,150 +5,101 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, RotateCcw, ChevronRight, Pause, SkipForward, Code, Terminal } from 'lucide-react';
-import { useCodeParser, ParsedProcess } from '@/hooks/useCodeParser';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Play, RotateCcw, Pause, SkipForward, Code, Terminal, Info, Skull, UserX } from 'lucide-react';
+import { useCodeSimulator, SimProcess } from '@/hooks/useCodeSimulator';
 
 const codeTemplates = [
   {
-    id: 'single-fork',
-    name: 'Single Fork',
-    description: 'Basic fork() creating one child process',
-    code: `#include <stdio.h>
-#include <unistd.h>
-
-int main() {
-    printf("Parent PID: %d\\n", getpid());
-    
-    pid_t pid = fork();
-    
-    if (pid == 0) {
-        printf("Child PID: %d\\n", getpid());
-        exit(0);
-    } else {
-        printf("Created child: %d\\n", pid);
-        wait(NULL);
-    }
-    
-    return 0;
-}`
-  },
-  {
-    id: 'fork-wait',
-    name: 'Fork with Wait',
-    description: 'Parent waits for child to complete',
+    id: 'simple-fork',
+    name: 'Simple Fork',
+    description: 'Basic fork() - no zombie (parent waits)',
     code: `#include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
 int main() {
-    pid_t pid = fork();
-    
-    if (pid == 0) {
-        printf("Child working...\\n");
-        sleep(2);
-        printf("Child done\\n");
-        exit(0);
-    } else {
-        printf("Parent waiting...\\n");
-        wait(NULL);
-        printf("Child finished\\n");
-    }
-    
-    return 0;
+    fork();
+    wait(NULL);
+    exit(0);
 }`
   },
   {
-    id: 'multiple-fork',
-    name: 'Multiple Forks',
-    description: 'Creating multiple child processes',
-    code: `#include <stdio.h>
-#include <unistd.h>
-
-int main() {
-    for (int i = 0; i < 3; i++) {
-        pid_t pid = fork();
-        
-        if (pid == 0) {
-            printf("Child %d created\\n", i);
-            exit(0);
-        }
-    }
-    
-    for (int i = 0; i < 3; i++) {
-        wait(NULL);
-    }
-    
-    printf("All children done\\n");
-    return 0;
-}`
-  },
-  {
-    id: 'zombie-process',
+    id: 'zombie-demo',
     name: 'Zombie Process',
-    description: 'Child exits but parent does not wait',
+    description: 'Child exits but parent does NOT wait',
     code: `#include <stdio.h>
 #include <unistd.h>
 
 int main() {
-    pid_t pid = fork();
-    
-    if (pid == 0) {
-        printf("Child exiting...\\n");
-        exit(0);
-    } else {
-        printf("Parent sleeping...\\n");
-        sleep(30);
-    }
-    
-    return 0;
+    fork();
+    exit(0);
 }`
   },
   {
-    id: 'orphan-process',
+    id: 'proper-cleanup',
+    name: 'Proper Cleanup',
+    description: 'Parent waits after child exits - no zombie',
+    code: `#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    fork();
+    exit(0);
+    wait(NULL);
+}`
+  },
+  {
+    id: 'orphan-demo',
     name: 'Orphan Process',
-    description: 'Parent exits before child completes',
+    description: 'Parent exits first - child becomes orphan',
     code: `#include <stdio.h>
 #include <unistd.h>
 
 int main() {
-    pid_t pid = fork();
-    
-    if (pid == 0) {
-        sleep(5);
-        printf("Child: parent is now init\\n");
-        printf("New PPID: %d\\n", getppid());
-    } else {
-        printf("Parent exiting...\\n");
-        exit(0);
-    }
-    
-    return 0;
+    fork();
+    exit(0);
 }`
   },
   {
-    id: 'recursive-fork',
-    name: 'Recursive Forking',
-    description: 'Recursive process creation (fork chain)',
+    id: 'double-fork',
+    name: 'Double Fork',
+    description: 'Two consecutive forks → 4 processes',
     code: `#include <stdio.h>
 #include <unistd.h>
 
-void recursive_fork(int depth) {
-    if (depth <= 0) return;
-    
-    pid_t pid = fork();
-    
-    if (pid == 0) {
-        printf("Child at depth %d\\n", depth);
-        recursive_fork(depth - 1);
-        exit(0);
-    } else {
-        wait(NULL);
-    }
-}
+int main() {
+    fork();
+    fork();
+    exit(0);
+}`
+  },
+  {
+    id: 'triple-fork',
+    name: 'Triple Fork',
+    description: 'Three forks → 8 processes',
+    code: `#include <stdio.h>
+#include <unistd.h>
 
 int main() {
-    recursive_fork(3);
-    return 0;
+    fork();
+    fork();
+    fork();
+    exit(0);
+}`
+  },
+  {
+    id: 'fork-wait-clean',
+    name: 'Fork + Wait (Clean)',
+    description: 'Fork, child exits, parent waits - proper cleanup',
+    code: `#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    fork();
+    wait(NULL);
 }`
   }
 ];
@@ -160,15 +111,16 @@ export default function CodeEditor() {
   
   const {
     processes,
-    executionSteps,
-    currentStepIndex,
+    statements,
     logs,
-    initializeExecution,
+    stepCount,
+    isComplete,
+    initializeSimulation,
     executeStep,
     reset,
-    getCurrentStep,
-    isComplete
-  } = useCodeParser();
+    getCurrentStatement,
+    getProcessStats
+  } = useCodeSimulator();
 
   const handleTemplateChange = (templateId: string) => {
     const template = codeTemplates.find(t => t.id === templateId);
@@ -181,22 +133,23 @@ export default function CodeEditor() {
   };
 
   const handleRun = useCallback(() => {
-    if (currentStepIndex === -1) {
-      initializeExecution(code);
+    if (processes.length === 0) {
+      initializeSimulation(code);
     }
     setIsPlaying(true);
-  }, [currentStepIndex, code, initializeExecution]);
+  }, [processes.length, code, initializeSimulation]);
 
   const handlePause = () => {
     setIsPlaying(false);
   };
 
   const handleStep = useCallback(() => {
-    if (currentStepIndex === -1) {
-      initializeExecution(code);
+    if (processes.length === 0) {
+      initializeSimulation(code);
+      return;
     }
     executeStep();
-  }, [currentStepIndex, code, initializeExecution, executeStep]);
+  }, [processes.length, code, initializeSimulation, executeStep]);
 
   const handleReset = () => {
     reset();
@@ -208,50 +161,94 @@ export default function CodeEditor() {
     if (isPlaying && !isComplete) {
       const timer = setTimeout(() => {
         executeStep();
-      }, 1000);
+      }, 800);
       return () => clearTimeout(timer);
     } else if (isComplete) {
       setIsPlaying(false);
     }
-  }, [isPlaying, isComplete, executeStep]);
+  }, [isPlaying, isComplete, executeStep, stepCount]);
 
-  const currentStep = getCurrentStep();
-  const currentLine = currentStep?.lineNumber ?? -1;
+  const currentStatement = getCurrentStatement();
+  const currentLine = currentStatement?.lineNumber ?? -1;
+  const stats = getProcessStats();
 
-  const renderProcessTree = (procs: ParsedProcess[], depth: number = 0): JSX.Element[] => {
+  const getStateStyles = (state: SimProcess['state']) => {
+    switch (state) {
+      case 'running':
+        return 'border-process-running bg-process-running/20 text-foreground';
+      case 'waiting':
+        return 'border-process-waiting bg-process-waiting/20 text-foreground';
+      case 'zombie':
+        return 'border-process-zombie bg-process-zombie/20 border-dashed';
+      case 'orphan':
+        return 'border-process-orphan bg-process-orphan/20 border-dashed';
+      case 'terminated':
+        return 'border-muted bg-muted/20 opacity-50';
+      default:
+        return 'border-border';
+    }
+  };
+
+  const getStateLabel = (state: SimProcess['state']) => {
+    const labels: Record<string, { label: string; icon: React.ReactNode }> = {
+      running: { label: 'Running', icon: null },
+      waiting: { label: 'Waiting', icon: null },
+      zombie: { label: 'Zombie', icon: <Skull className="w-3 h-3" /> },
+      orphan: { label: 'Orphan', icon: <UserX className="w-3 h-3" /> },
+      terminated: { label: 'Exited', icon: null }
+    };
+    return labels[state] || { label: state, icon: null };
+  };
+
+  const renderProcessTree = (procs: SimProcess[], depth: number = 0): JSX.Element[] => {
     return procs.map((proc) => {
-      const stateColors: Record<string, string> = {
-        running: 'border-process-running bg-process-running/10',
-        waiting: 'border-process-waiting bg-process-waiting/10',
-        terminated: 'border-muted bg-muted/10',
-        zombie: 'border-process-zombie bg-process-zombie/10',
-        orphan: 'border-purple-500 bg-purple-500/10'
-      };
-
-      const stateLabels: Record<string, string> = {
-        running: 'Running',
-        waiting: 'Waiting',
-        terminated: 'Exited',
-        zombie: 'Zombie',
-        orphan: 'Orphan'
-      };
-
+      const stateInfo = getStateLabel(proc.state);
+      
       return (
-        <div key={proc.id} className="flex flex-col items-center">
-          <div
-            className={`rounded-lg border-2 p-3 text-center transition-all duration-300 min-w-[100px] ${stateColors[proc.state]}`}
-          >
-            <div className="font-mono text-sm font-bold text-foreground">PID {proc.pid}</div>
-            <div className="text-xs text-muted-foreground">PPID: {proc.ppid}</div>
-            <Badge variant="outline" className="text-xs mt-1">
-              {stateLabels[proc.state]}
-            </Badge>
-          </div>
-          {proc.children.length > 0 && (
+        <div key={proc.pid} className="flex flex-col items-center">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className={`rounded-lg border-2 p-3 text-center transition-all duration-300 min-w-[110px] cursor-help ${getStateStyles(proc.state)}`}
+              >
+                <div className="font-mono text-sm font-bold">PID {proc.pid}</div>
+                <div className="text-xs text-muted-foreground">PPID: {proc.ppid}</div>
+                <Badge 
+                  variant="outline" 
+                  className={`text-xs mt-1 gap-1 ${
+                    proc.state === 'zombie' ? 'border-process-zombie text-process-zombie' :
+                    proc.state === 'orphan' ? 'border-process-orphan text-process-orphan' : ''
+                  }`}
+                >
+                  {stateInfo.icon}
+                  {stateInfo.label}
+                </Badge>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-[250px]">
+              {proc.state === 'zombie' && (
+                <p>Process terminated but parent hasn't called wait(). Exit status not collected.</p>
+              )}
+              {proc.state === 'orphan' && (
+                <p>Parent exited. Process adopted by init (PID 1). Still running.</p>
+              )}
+              {proc.state === 'running' && (
+                <p>Process is actively executing.</p>
+              )}
+              {proc.state === 'waiting' && (
+                <p>Blocked on wait() until child exits.</p>
+              )}
+              {proc.state === 'terminated' && (
+                <p>Process has cleanly exited.</p>
+              )}
+            </TooltipContent>
+          </Tooltip>
+          
+          {proc.children.filter(c => c.state !== 'terminated').length > 0 && (
             <>
-              <div className="w-px h-6 bg-primary/50" />
-              <div className="flex gap-4">
-                {renderProcessTree(proc.children, depth + 1)}
+              <div className="w-px h-4 bg-primary/40" />
+              <div className="flex gap-3">
+                {renderProcessTree(proc.children.filter(c => c.state !== 'terminated'), depth + 1)}
               </div>
             </>
           )}
@@ -266,9 +263,10 @@ export default function CodeEditor() {
 
       <main className="container py-6">
         <div className="text-center mb-6">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Code Template Editor</h1>
-          <p className="text-muted-foreground">
-            Write or modify C-like code and visualize process execution step-by-step
+          <h1 className="text-3xl font-bold text-foreground mb-2">Process Simulator</h1>
+          <p className="text-muted-foreground flex items-center justify-center gap-2">
+            <Info className="w-4 h-4" />
+            This editor simulates OS behavior logically; it does not execute real C code.
           </p>
         </div>
 
@@ -288,7 +286,10 @@ export default function CodeEditor() {
                   <SelectContent>
                     {codeTemplates.map((t) => (
                       <SelectItem key={t.id} value={t.id}>
-                        {t.name}
+                        <div>
+                          <div className="font-medium">{t.name}</div>
+                          <div className="text-xs text-muted-foreground">{t.description}</div>
+                        </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -299,13 +300,13 @@ export default function CodeEditor() {
               <div className="bg-background rounded-lg border border-border overflow-hidden">
                 <div className="flex">
                   {/* Line numbers */}
-                  <div className="bg-muted/30 px-3 py-4 text-right select-none">
+                  <div className="bg-muted/30 px-3 py-4 text-right select-none border-r border-border">
                     {code.split('\n').map((_, i) => (
                       <div
                         key={i}
                         className={`text-xs font-mono leading-6 ${
                           currentLine === i + 1
-                            ? 'text-primary font-bold'
+                            ? 'text-primary font-bold bg-primary/20 -mr-3 pr-3 rounded-l'
                             : 'text-muted-foreground'
                         }`}
                       >
@@ -316,16 +317,12 @@ export default function CodeEditor() {
                   {/* Code */}
                   <textarea
                     value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className="flex-1 bg-transparent p-4 font-mono text-sm text-foreground resize-none focus:outline-none min-h-[400px] leading-6"
-                    spellCheck={false}
-                    style={{
-                      background: code.split('\n').map((_, i) =>
-                        currentLine === i + 1
-                          ? `linear-gradient(hsl(var(--primary) / 0.15), hsl(var(--primary) / 0.15))`
-                          : 'transparent'
-                      ).join(', ')
+                    onChange={(e) => {
+                      setCode(e.target.value);
+                      reset();
                     }}
+                    className="flex-1 bg-transparent p-4 font-mono text-sm text-foreground resize-none focus:outline-none min-h-[300px] leading-6"
+                    spellCheck={false}
                   />
                 </div>
               </div>
@@ -338,9 +335,9 @@ export default function CodeEditor() {
                     Pause
                   </Button>
                 ) : (
-                  <Button onClick={handleRun} className="gap-2 glow-primary">
+                  <Button onClick={handleRun} className="gap-2 glow-primary" disabled={isComplete}>
                     <Play className="w-4 h-4" />
-                    Run
+                    {processes.length === 0 ? 'Run' : 'Continue'}
                   </Button>
                 )}
                 <Button onClick={handleStep} variant="outline" className="gap-2" disabled={isComplete}>
@@ -353,16 +350,39 @@ export default function CodeEditor() {
                 </Button>
               </div>
 
-              {/* Current Step Info */}
-              {currentStep && (
+              {/* Process Stats */}
+              {processes.length > 0 && (
+                <div className="flex gap-2 mt-4 flex-wrap">
+                  <Badge variant="outline">Total: {stats.total}</Badge>
+                  <Badge variant="outline" className="border-process-running text-process-running">
+                    Running: {stats.running}
+                  </Badge>
+                  <Badge variant="outline" className="border-process-waiting text-process-waiting">
+                    Waiting: {stats.waiting}
+                  </Badge>
+                  {stats.zombie > 0 && (
+                    <Badge variant="outline" className="border-process-zombie text-process-zombie">
+                      <Skull className="w-3 h-3 mr-1" />
+                      Zombie: {stats.zombie}
+                    </Badge>
+                  )}
+                  {stats.orphan > 0 && (
+                    <Badge variant="outline" className="border-process-orphan text-process-orphan">
+                      <UserX className="w-3 h-3 mr-1" />
+                      Orphan: {stats.orphan}
+                    </Badge>
+                  )}
+                </div>
+              )}
+
+              {/* Current Statement Info */}
+              {currentStatement && (
                 <div className="mt-4 p-4 bg-primary/10 border border-primary/30 rounded-lg">
                   <div className="flex items-center gap-2 mb-2">
-                    <ChevronRight className="w-4 h-4 text-primary" />
-                    <span className="font-semibold text-primary">Step {currentStepIndex + 1}</span>
+                    <Badge>Step {stepCount + 1}</Badge>
+                    <span className="font-mono text-sm text-primary">{currentStatement.type}()</span>
                   </div>
-                  <p className="text-sm font-mono text-muted-foreground">{currentStep.code}</p>
-                  <p className="text-sm mt-2">{currentStep.description}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{currentStep.osExplanation}</p>
+                  <p className="text-sm text-muted-foreground">{currentStatement.osExplanation}</p>
                 </div>
               )}
             </CardContent>
@@ -375,13 +395,13 @@ export default function CodeEditor() {
                 <CardTitle>Process Tree</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="min-h-[300px] flex items-center justify-center">
+                <div className="min-h-[250px] flex items-center justify-center">
                   {processes.length === 0 ? (
                     <div className="text-center text-muted-foreground">
                       <p>Click "Run" or "Step" to start simulation</p>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center gap-4">
+                    <div className="flex flex-col items-center gap-2">
                       {renderProcessTree(processes)}
                     </div>
                   )}
@@ -398,14 +418,23 @@ export default function CodeEditor() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ScrollArea className="h-[150px] bg-background rounded-lg border border-border p-3">
+                <ScrollArea className="h-[200px] bg-background rounded-lg border border-border p-3 font-mono text-xs">
                   {logs.length === 0 ? (
-                    <p className="text-muted-foreground text-sm font-mono">No output yet...</p>
+                    <p className="text-muted-foreground">No output yet...</p>
                   ) : (
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       {logs.map((log, i) => (
-                        <div key={i} className="text-sm font-mono text-foreground">
-                          <span className="text-muted-foreground">$</span> {log}
+                        <div 
+                          key={i} 
+                          className={`${
+                            log.includes('[WARN]') ? 'text-process-zombie' :
+                            log.includes('[STATE]') ? 'text-process-waiting' :
+                            log.includes('[FORK]') ? 'text-process-running' :
+                            log.includes('[DONE]') ? 'text-primary' :
+                            'text-foreground'
+                          }`}
+                        >
+                          {log}
                         </div>
                       ))}
                     </div>
@@ -414,33 +443,28 @@ export default function CodeEditor() {
               </CardContent>
             </Card>
 
-            {/* Execution Steps */}
-            {executionSteps.length > 0 && (
+            {/* Parsed Statements */}
+            {statements.length > 0 && (
               <Card className="bg-card border-border">
                 <CardHeader className="pb-3">
-                  <CardTitle>Execution Steps</CardTitle>
+                  <CardTitle>Parsed OS Calls</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[150px]">
-                    <div className="space-y-2">
-                      {executionSteps.map((step, i) => (
+                  <ScrollArea className="h-[120px]">
+                    <div className="space-y-1">
+                      {statements.map((stmt, i) => (
                         <div
                           key={i}
-                          className={`p-2 rounded-lg text-sm ${
-                            i === currentStepIndex
+                          className={`p-2 rounded text-sm flex items-center gap-2 ${
+                            currentStatement === stmt
                               ? 'bg-primary/20 border border-primary'
-                              : i < currentStepIndex
-                              ? 'bg-muted/50'
-                              : 'bg-background'
+                              : 'bg-muted/30'
                           }`}
                         >
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="font-mono">
-                              L{step.lineNumber}
-                            </Badge>
-                            <span className="font-medium">{step.action}</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-1">{step.description}</p>
+                          <Badge variant="outline" className="font-mono text-xs">
+                            L{stmt.lineNumber}
+                          </Badge>
+                          <span className="font-mono font-medium">{stmt.type}()</span>
                         </div>
                       ))}
                     </div>
