@@ -104,8 +104,9 @@ export const useProcessTree = () => {
     };
   }, []);
 
-  // CORRECT fork() semantics: fork duplicates ALL active processes
-  // Each running process creates one child
+  // ✅ UNIX fork() semantics (snapshot-based):
+  // For ONE fork() call, take a snapshot of currently-running processes.
+  // Each process in that snapshot creates EXACTLY ONE child.
   const forkAllProcesses = useCallback(() => {
     if (!root) {
       const newRoot = createRootProcess();
@@ -116,67 +117,72 @@ export const useProcessTree = () => {
     const newForkLevel = forkCount + 1;
     setForkCount(newForkLevel);
 
-    // Get all currently running processes
-    const runningProcesses = getAllRunningProcesses(root);
-    const newChildren: ProcessNode[] = [];
+    // Snapshot of currently running processes (by PID + depth at time of fork)
+    const runningSnapshot = getAllRunningProcesses(root).map((p) => ({
+      pid: p.pid,
+      depth: p.depth,
+    }));
 
-    addLog('info', `fork() called - duplicating ${runningProcesses.length} running process(es)`, undefined);
+    addLog(
+      'info',
+      `fork() #${newForkLevel} called - snapshot has ${runningSnapshot.length} running process(es). Each creates exactly 1 child.`,
+      undefined
+    );
     addLog('info', `⚠️ Execution order is scheduler-dependent (non-deterministic)`, undefined);
 
-    // Create one child for each running process
-    const createChildren = (tree: ProcessNode): ProcessNode => {
-      if (tree.state !== 'running') {
-        return {
-          ...tree,
-          children: tree.children.map(c => createChildren(c)),
-        };
-      }
+    const createdChildren: ProcessNode[] = [];
 
+    // Build the updated tree by attaching exactly one child per snapshot process
+    let updatedRoot = root;
+    for (const parent of runningSnapshot) {
       const childPid = generatePid();
       const childNode: ProcessNode = {
         id: `process-${childPid}`,
         pid: childPid,
-        ppid: tree.pid,
+        ppid: parent.pid,
         state: 'running',
         children: [],
         createdAt: Date.now(),
-        depth: tree.depth + 1,
+        depth: parent.depth + 1,
         forkLevel: newForkLevel,
       };
-      newChildren.push(childNode);
 
-      return {
-        ...tree,
-        children: [...tree.children.map(c => createChildren(c)), childNode],
-      };
-    };
+      createdChildren.push(childNode);
+      updatedRoot = updateNode(updatedRoot, parent.pid, (n) => ({
+        ...n,
+        children: [...n.children, childNode],
+      }));
+    }
 
-    const updatedRoot = createChildren(root);
     setRoot(updatedRoot);
 
-    // Update init process if it exists
+    // Keep init tree in sync if present
     if (initProcess) {
-      setInitProcess(prev => {
+      setInitProcess((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
-          children: prev.children.map(c => {
-            if (c.pid === root.pid) return updatedRoot;
-            return c;
-          }),
+          children: prev.children.map((c) => (c.pid === root.pid ? updatedRoot : c)),
         };
       });
     }
 
-    // Log each new child
-    newChildren.forEach(child => {
-      addLog('success', `fork() → PID ${child.ppid} created child PID ${child.pid} (fork #${newForkLevel})`, child.pid);
-    });
+    for (const child of createdChildren) {
+      addLog(
+        'success',
+        `fork() → PID ${child.ppid} created child PID ${child.pid} (fork #${newForkLevel})`,
+        child.pid
+      );
+    }
 
-    addLog('info', `Total processes after fork #${newForkLevel}: ${runningProcesses.length + newChildren.length}`, undefined);
+    addLog(
+      'info',
+      `Total processes created by fork #${newForkLevel}: ${createdChildren.length} (total running immediately after fork: ${runningSnapshot.length + createdChildren.length})`,
+      undefined
+    );
 
-    return newChildren;
-  }, [root, initProcess, forkCount, getAllRunningProcesses, createRootProcess, addLog]);
+    return createdChildren;
+  }, [root, initProcess, forkCount, getAllRunningProcesses, createRootProcess, addLog, updateNode]);
 
   // Legacy single fork for specific parent (used in scenarios)
   const forkProcess = useCallback((parentPid: number) => {
