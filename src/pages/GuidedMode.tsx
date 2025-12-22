@@ -60,16 +60,26 @@ const GuidedMode = () => {
 
     switch (step.action) {
       case 'fork':
+        // For guided mode, fork from root to show single fork behavior
         forkProcess(root.pid);
         break;
       case 'wait':
         waitProcess(root.pid);
         break;
       case 'exit':
-        const children = root.children.filter(c => c.state === 'running');
+        // Exit the first running child (zombie scenario)
+        const children = root.children.filter(c => c.state === 'running' || c.state === 'orphan');
         if (children.length > 0) {
           exitProcess(children[0].pid);
         }
+        break;
+      case 'orphan':
+        // Orphan scenario: parent (root) exits while child is running
+        // This makes the child an orphan
+        exitProcess(root.pid);
+        break;
+      case 'explain':
+        // No action needed, just show explanation
         break;
     }
   }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess]);
