@@ -26,13 +26,15 @@ export const useProcessTree = () => {
   }, []);
 
   const createRootProcess = useCallback(() => {
-    pidCounter = 1000;
+    // Reset counter to 1001 so root gets 1001, and first child gets 1002
+    pidCounter = 1001;
     setForkCount(0);
     
-    // Create init process (PID 1)
+    const rootPid = pidCounter; // Root gets PID 1001
+    
     const rootNode: ProcessNode = {
-      id: `process-1001`,
-      pid: 1001,
+      id: `process-${rootPid}`,
+      pid: rootPid,
       ppid: 1,
       state: 'running',
       children: [],
@@ -56,7 +58,7 @@ export const useProcessTree = () => {
     setRoot(rootNode);
     setLogs([]);
     addLog('info', 'Init process (PID 1) exists - adopts orphan processes', 1);
-    addLog('success', `Root process created with PID 1001`, 1001);
+    addLog('success', `Root process created with PID ${rootPid}`, rootPid);
     return rootNode;
   }, [addLog]);
 
