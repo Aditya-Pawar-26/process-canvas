@@ -253,6 +253,10 @@ export const useProcessTree = () => {
     return childNode;
   }, [root, initProcess, forkCount, findInTree, addLog, createRootProcess]);
 
+  // ✅ OS-CORRECT wait() logic:
+  // 1. If zombie children exist → reap them (zombie → terminated)
+  // 2. If running children exist → block (waiting state)
+  // 3. If no children → return immediately
   const waitProcess = useCallback((parentPid: number) => {
     if (!root) return;
 
@@ -262,12 +266,20 @@ export const useProcessTree = () => {
       return;
     }
 
-    const runningChildren = parent.children.filter(c => c.state === 'running');
+    if (parent.state !== 'running' && parent.state !== 'orphan') {
+      addLog('error', `Cannot call wait() from ${parent.state} process`, parentPid);
+      return;
+    }
+
+    const runningChildren = parent.children.filter(c => c.state === 'running' || c.state === 'orphan');
     const zombieChildren = parent.children.filter(c => c.state === 'zombie');
 
-    // If there are zombie children, reap them
+    // Priority 1: If there are zombie children, reap them (collect exit status)
     if (zombieChildren.length > 0) {
       const zombie = zombieChildren[0];
+      
+      addLog('info', `wait() by PID ${parentPid} → Found zombie child PID ${zombie.pid}`, parentPid);
+      
       const updateTree = (node: ProcessNode): ProcessNode => {
         if (node.pid === zombie.pid) {
           return { ...node, state: 'terminated' as ProcessState };
@@ -288,39 +300,45 @@ export const useProcessTree = () => {
         } : prev);
       }
 
-      addLog('success', `wait() by PID ${parentPid} → Reaped zombie PID ${zombie.pid}`, parentPid);
+      addLog('success', `wait() by PID ${parentPid} → Reaped zombie PID ${zombie.pid} (exit status collected)`, parentPid);
+      addLog('info', `Zombie PID ${zombie.pid} removed from process table`, zombie.pid);
       return;
     }
 
-    if (runningChildren.length === 0) {
-      addLog('warning', `wait() by PID ${parentPid} → No children to wait for`, parentPid);
-      return;
-    }
-
-    // Set parent to waiting state
-    const updateTree = (node: ProcessNode): ProcessNode => {
-      if (node.pid === parentPid) {
-        return { ...node, state: 'waiting' as ProcessState };
-      }
-      return {
-        ...node,
-        children: node.children.map(updateTree),
+    // Priority 2: No zombies but running children exist → block
+    if (runningChildren.length > 0) {
+      const updateTree = (node: ProcessNode): ProcessNode => {
+        if (node.pid === parentPid) {
+          return { ...node, state: 'waiting' as ProcessState };
+        }
+        return {
+          ...node,
+          children: node.children.map(updateTree),
+        };
       };
-    };
 
-    const updatedRoot = updateTree(root);
-    setRoot(updatedRoot);
+      const updatedRoot = updateTree(root);
+      setRoot(updatedRoot);
 
-    if (initProcess) {
-      setInitProcess(prev => prev ? {
-        ...prev,
-        children: prev.children.map(c => c.pid === root.pid ? updatedRoot : c),
-      } : prev);
+      if (initProcess) {
+        setInitProcess(prev => prev ? {
+          ...prev,
+          children: prev.children.map(c => c.pid === root.pid ? updatedRoot : c),
+        } : prev);
+      }
+
+      addLog('info', `wait() by PID ${parentPid} → Blocking until child terminates`, parentPid);
+      addLog('info', `Parent will wake when any child calls exit()`, parentPid);
+      return;
     }
 
-    addLog('info', `wait() by PID ${parentPid} → Blocking until child terminates`, parentPid);
+    // No children at all
+    addLog('warning', `wait() by PID ${parentPid} → No children to wait for (returns -1)`, parentPid);
   }, [root, initProcess, findInTree, addLog]);
 
+  // ✅ OS-CORRECT exitProcess logic:
+  // ZOMBIE: Child exits + parent NOT waiting → child becomes zombie (terminated but not reaped)
+  // ORPHAN: Parent exits + child still running → child adopted by init (still RUNNING)
   const exitProcess = useCallback((pid: number) => {
     if (!root) return;
 
@@ -330,36 +348,59 @@ export const useProcessTree = () => {
       return;
     }
 
-    // Handle orphan creation: if this process has running children
-    const runningChildren = node.children.filter(c => c.state === 'running');
-    if (runningChildren.length > 0) {
-      addLog('warning', `exit() by PID ${pid} → ${runningChildren.length} child(ren) become ORPHAN`, pid);
-      runningChildren.forEach(c => {
-        addLog('info', `PID ${c.pid} adopted by init (PID 1), PPID changes from ${c.ppid} to 1`, c.pid);
+    // Check if this process can exit
+    if (node.state !== 'running' && node.state !== 'orphan') {
+      addLog('error', `Cannot exit process in ${node.state} state`, pid);
+      return;
+    }
+
+    // Find parent to determine if this will create a ZOMBIE
+    const parent = findInTree(node.ppid);
+    
+    // Collect running/orphan children that will become orphans
+    const activeChildren = node.children.filter(c => c.state === 'running' || c.state === 'orphan');
+    
+    // Log orphan creation first (children of exiting process)
+    if (activeChildren.length > 0) {
+      addLog('info', `[INFO] Parent PID ${pid} exiting with ${activeChildren.length} active child(ren)`, pid);
+      activeChildren.forEach(c => {
+        addLog('warning', `[STATE] PID ${c.pid} became ORPHAN`, c.pid);
+        addLog('info', `[INFO] Kernel reassigned PPID ${c.ppid} → 1 (init)`, c.pid);
       });
     }
 
-    // Find parent to check if it's waiting
-    const parent = findInTree(node.ppid);
-    const newState: ProcessState = parent?.state === 'waiting' ? 'terminated' : 'zombie';
+    // Determine exit state based on parent's state
+    // ZOMBIE: Parent exists and is NOT waiting (hasn't called wait())
+    // TERMINATED: Parent called wait() (was in waiting state)
+    let newState: ProcessState;
+    
+    if (parent?.state === 'waiting') {
+      // Parent was waiting - child terminates normally and is reaped
+      newState = 'terminated';
+      addLog('info', `[INFO] Child PID ${pid} exited`, pid);
+      addLog('success', `exit() by PID ${pid} → Terminated normally (parent called wait())`, pid);
+    } else if (parent && parent.state === 'running') {
+      // Parent is running but not waiting - child becomes ZOMBIE
+      newState = 'zombie';
+      addLog('info', `[INFO] Child PID ${pid} exited`, pid);
+      addLog('warning', `[WARN] Parent PID ${parent.pid} did not call wait()`, parent.pid);
+      addLog('error', `[STATE] PID ${pid} entered ZOMBIE state`, pid);
+      addLog('info', `💀 Zombie: Process terminated but entry remains until parent calls wait()`, pid);
+    } else {
+      // No parent or parent is init - just terminate
+      newState = 'terminated';
+      addLog('info', `[INFO] PID ${pid} exited`, pid);
+    }
 
     // Build the updated tree
     const updateTree = (n: ProcessNode): ProcessNode => {
       if (n.pid === pid) {
-        // Mark children as orphans and move them
-        const orphanedChildren = n.children.map(c => ({
-          ...c,
-          ppid: 1,
-          state: c.state === 'running' ? 'orphan' as ProcessState : c.state,
-          isOrphan: c.state === 'running',
-          depth: 1,
-          children: c.children,
-        }));
-
+        // Mark this process as zombie/terminated
+        // Keep children in tree but they'll be moved to init
         return {
           ...n,
           state: newState,
-          children: orphanedChildren.filter(c => c.state !== 'orphan'), // Remove orphans, they go to init
+          children: n.children.filter(c => c.state !== 'running' && c.state !== 'orphan'),
         };
       }
       return {
@@ -370,12 +411,12 @@ export const useProcessTree = () => {
 
     let updatedRoot = updateTree(root);
 
-    // Move orphans to init
-    if (runningChildren.length > 0 && initProcess) {
-      const orphans = runningChildren.map(c => ({
+    // Move orphans to init - they are STILL RUNNING, just adopted
+    if (activeChildren.length > 0 && initProcess) {
+      const orphans = activeChildren.map(c => ({
         ...c,
         ppid: 1,
-        state: 'orphan' as ProcessState,
+        state: 'orphan' as ProcessState, // Orphan = running but parent exited
         isOrphan: true,
         depth: 1,
       }));
@@ -397,19 +438,18 @@ export const useProcessTree = () => {
       });
     }
 
-    // If parent was waiting, wake it up
+    // If parent was waiting, wake it up after child exits
     if (parent?.state === 'waiting') {
-      const remainingRunning = parent.children.filter(c => c.pid !== pid && c.state === 'running');
-      if (remainingRunning.length === 0) {
+      const remainingActive = parent.children.filter(
+        c => c.pid !== pid && (c.state === 'running' || c.state === 'orphan')
+      );
+      if (remainingActive.length === 0) {
         updatedRoot = updateNode(updatedRoot, parent.pid, (p) => ({
           ...p,
           state: 'running' as ProcessState,
         }));
+        addLog('success', `Parent PID ${parent.pid} resumed (all children terminated)`, parent.pid);
       }
-      addLog('success', `exit() by PID ${pid} → Terminated normally (parent was waiting)`, pid);
-    } else {
-      addLog('warning', `exit() by PID ${pid} → Became ZOMBIE (parent not waiting)`, pid);
-      addLog('info', `💀 Zombie: Process finished but exit status not collected by parent`, pid);
     }
 
     setRoot(updatedRoot);

@@ -55,6 +55,7 @@ export default {
           running: "hsl(var(--process-running))",
           waiting: "hsl(var(--process-waiting))",
           zombie: "hsl(var(--process-zombie))",
+          orphan: "hsl(var(--process-orphan))",
           terminated: "hsl(var(--process-terminated))",
         },
         sidebar: {

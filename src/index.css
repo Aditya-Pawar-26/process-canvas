@@ -34,7 +34,8 @@
     /* Process states */
     --process-running: 142 71% 45%; /* #22c55e green */
     --process-waiting: 45 93% 47%; /* #eab308 yellow */
-    --process-zombie: 0 84% 60%; /* #ef4444 red */
+    --process-zombie: 0 72% 51%; /* #dc2626 red - TERMINATED but not reaped */
+    --process-orphan: 32 95% 55%; /* #f97316 orange - RUNNING but parent exited */
     --process-terminated: 215 16% 47%;
 
     --border: 222 47% 20%;
