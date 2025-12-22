@@ -8,6 +8,7 @@ export interface SimProcess {
   pc: number; // program counter - index into statements
   children: SimProcess[];
   depth: number;
+  hasExited: boolean; // Track if this specific process has executed exit()
 }
 
 // Parsed statement from code
@@ -45,12 +46,17 @@ export const useCodeSimulator = () => {
       const trimmed = line.trim();
       const lineNum = index + 1;
 
+      // Skip comments
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) {
+        return;
+      }
+
       if (trimmed.includes('fork()')) {
         result.push({
           type: 'fork',
           lineNumber: lineNum,
           code: trimmed,
-          osExplanation: 'fork() duplicates calling process. Returns: 0 to child, child_pid to parent. Both continue execution.'
+          osExplanation: 'fork() duplicates calling process. Returns: 0 to child, child_pid to parent. Both continue execution from next statement.'
         });
       } else if (trimmed.includes('wait(') || trimmed.includes('waitpid(')) {
         result.push({
@@ -64,14 +70,14 @@ export const useCodeSimulator = () => {
           type: 'exit',
           lineNumber: lineNum,
           code: trimmed,
-          osExplanation: 'exit() terminates calling process. If parent not waiting → becomes zombie. If parent already exited → process is orphan.'
+          osExplanation: 'exit() terminates ONLY the calling process. If parent alive but not waiting → zombie. If parent already exited → orphan.'
         });
       } else if (trimmed.includes('sleep(')) {
         result.push({
           type: 'sleep',
           lineNumber: lineNum,
           code: trimmed,
-          osExplanation: 'sleep() pauses execution. Process remains running.'
+          osExplanation: 'sleep() pauses execution temporarily. Process remains in running state.'
         });
       }
     });
@@ -95,11 +101,12 @@ export const useCodeSimulator = () => {
       state: 'running',
       pc: 0,
       children: [],
-      depth: 0
+      depth: 0,
+      hasExited: false
     };
 
     setProcesses([root]);
-    setLogs(['[EXEC] Created root process PID 1001']);
+    setLogs(['[EXEC] Created root process PID 1001 (parent: init PID 1)']);
     
     return parsed;
   }, [parseStatements]);
@@ -141,29 +148,52 @@ export const useCodeSimulator = () => {
       const all = getAllProcesses(tree);
       
       // Find next running process to execute (round-robin simulation)
-      const running = all.filter(p => p.state === 'running' && p.pc < statements.length);
+      // Only processes that haven't exited and have statements to execute
+      const running = all.filter(p => 
+        p.state === 'running' && 
+        !p.hasExited && 
+        p.pc < statements.length
+      );
       
       if (running.length === 0) {
         // Check if any processes are waiting
         const waiting = all.filter(p => p.state === 'waiting');
-        if (waiting.length === 0) {
-          setIsComplete(true);
-          setLogs(l => [...l, '[DONE] All processes completed']);
-          return tree;
-        }
-        
-        // Check if waiting processes have zombie children to reap
-        for (const waiter of waiting) {
-          const zombie = waiter.children.find(c => c.state === 'zombie');
-          if (zombie) {
-            zombie.state = 'terminated';
-            waiter.state = 'running';
-            setLogs(l => [...l, `[REAP] PID ${waiter.pid} reaped zombie PID ${zombie.pid}`]);
-            return tree;
+        if (waiting.length > 0) {
+          // Check if waiting processes have zombie children to reap
+          for (const waiter of waiting) {
+            const zombie = waiter.children.find(c => c.state === 'zombie');
+            if (zombie) {
+              zombie.state = 'terminated';
+              waiter.state = 'running';
+              waiter.pc++;
+              setLogs(l => [...l, `[REAP] PID ${waiter.pid} reaped zombie PID ${zombie.pid}`]);
+              setStepCount(s => s + 1);
+              return tree;
+            }
           }
         }
         
-        setIsComplete(true);
+        // No more work to do
+        const zombies = all.filter(p => p.state === 'zombie');
+        const orphans = all.filter(p => p.state === 'orphan');
+        const stillRunning = all.filter(p => p.state === 'running' && !p.hasExited);
+        
+        if (!isComplete) {
+          const summaryLogs: string[] = [];
+          if (zombies.length > 0) {
+            summaryLogs.push(`[WARN] 💀 ${zombies.length} zombie process(es) remain - parent never called wait()`);
+          }
+          if (orphans.length > 0) {
+            summaryLogs.push(`[INFO] 👤 ${orphans.length} orphan process(es) adopted by init (still running)`);
+          }
+          if (stillRunning.length > 0) {
+            summaryLogs.push(`[INFO] ✓ ${stillRunning.length} process(es) still running normally`);
+          }
+          summaryLogs.push('[DONE] Simulation complete');
+          setLogs(l => [...l, ...summaryLogs]);
+          setIsComplete(true);
+        }
+        
         return tree;
       }
 
@@ -185,7 +215,7 @@ export const useCodeSimulator = () => {
           break;
 
         case 'fork': {
-          // Create exactly one child
+          // Create exactly one child from THIS process only
           const childPid = generatePid();
           const child: SimProcess = {
             pid: childPid,
@@ -193,18 +223,20 @@ export const useCodeSimulator = () => {
             state: 'running',
             pc: proc.pc + 1, // Child continues from next statement
             children: [],
-            depth: proc.depth + 1
+            depth: proc.depth + 1,
+            hasExited: false
           };
           proc.children.push(child);
           proc.pc++; // Parent also continues
           
           newLogs.push(`[FORK] PID ${proc.pid} created child PID ${childPid}`);
-          newLogs.push(`[INFO] Both processes continue execution independently`);
+          newLogs.push(`[INFO] Parent returns ${childPid}, child returns 0`);
+          newLogs.push(`[INFO] Both processes continue independently`);
           break;
         }
 
         case 'wait': {
-          // Check for zombie children first
+          // Check for zombie children first - reap them
           const zombie = proc.children.find(c => c.state === 'zombie');
           if (zombie) {
             zombie.state = 'terminated';
@@ -212,51 +244,58 @@ export const useCodeSimulator = () => {
             newLogs.push(`[WAIT] PID ${proc.pid} reaped zombie child PID ${zombie.pid}`);
             newLogs.push(`[STATE] PID ${zombie.pid} removed from process table`);
           } else {
-            // Check for running children
-            const runningChild = proc.children.find(c => c.state === 'running');
-            if (runningChild) {
+            // Check for running children (not yet exited)
+            const activeChild = proc.children.find(c => 
+              c.state === 'running' && !c.hasExited
+            );
+            if (activeChild) {
               proc.state = 'waiting';
               newLogs.push(`[WAIT] PID ${proc.pid} blocking until child exits`);
             } else {
-              // No children to wait for
+              // No children to wait for (either no children or all already handled)
               proc.pc++;
-              newLogs.push(`[WAIT] PID ${proc.pid} - no children to wait for`);
+              newLogs.push(`[WAIT] PID ${proc.pid} - no children to wait for, continuing`);
             }
           }
           break;
         }
 
         case 'exit': {
+          // Mark this specific process as having executed exit()
+          proc.hasExited = true;
+          
           // Find parent in tree
           const parent = findProcess(tree, proc.ppid);
           
-          if (!parent || parent.state === 'terminated') {
-            // Parent already exited - become orphan (adopted by init)
+          if (!parent || parent.hasExited || parent.state === 'terminated') {
+            // Parent already exited - this process becomes orphan
             proc.state = 'orphan';
             proc.ppid = 1;
-            newLogs.push(`[EXIT] PID ${proc.pid} exiting`);
-            newLogs.push(`[STATE] PID ${proc.pid} became ORPHAN (adopted by init PID 1)`);
+            newLogs.push(`[EXIT] PID ${proc.pid} calling exit()`);
+            newLogs.push(`[STATE] PID ${proc.pid} became ORPHAN (parent already exited)`);
+            newLogs.push(`[INFO] 👤 Adopted by init (PID 1) - still running`);
           } else if (parent.state === 'waiting') {
-            // Parent is waiting - clean exit
+            // Parent is waiting - clean exit, wake parent
             proc.state = 'terminated';
             parent.state = 'running';
             parent.pc++;
             newLogs.push(`[EXIT] PID ${proc.pid} terminated cleanly`);
             newLogs.push(`[STATE] Parent PID ${parent.pid} resumed after wait()`);
           } else {
-            // Parent running but not waiting - become zombie
+            // Parent is running but not waiting - become zombie
             proc.state = 'zombie';
-            newLogs.push(`[EXIT] PID ${proc.pid} exiting`);
-            newLogs.push(`[STATE] PID ${proc.pid} became ZOMBIE (parent not waiting)`);
-            newLogs.push(`[WARN] 💀 Zombie: Exit status not collected`);
+            newLogs.push(`[EXIT] PID ${proc.pid} calling exit()`);
+            newLogs.push(`[STATE] PID ${proc.pid} became ZOMBIE`);
+            newLogs.push(`[WARN] 💀 Parent PID ${parent.pid} not waiting - exit status not collected`);
           }
 
           // If this process has running children, they become orphans
           for (const child of proc.children) {
-            if (child.state === 'running') {
+            if (child.state === 'running' && !child.hasExited) {
               child.state = 'orphan';
               child.ppid = 1;
               newLogs.push(`[STATE] PID ${child.pid} became ORPHAN (parent exited)`);
+              newLogs.push(`[INFO] 👤 Adopted by init (PID 1)`);
             }
           }
           break;
@@ -276,31 +315,37 @@ export const useCodeSimulator = () => {
       
       // Check if simulation is complete
       const allAfter = getAllProcesses(tree);
-      const stillRunning = allAfter.filter(p => 
-        (p.state === 'running' && p.pc < statements.length) || 
+      const stillActive = allAfter.filter(p => 
+        (p.state === 'running' && !p.hasExited && p.pc < statements.length) || 
         p.state === 'waiting'
       );
       
-      if (stillRunning.length === 0) {
+      if (stillActive.length === 0 && !isComplete) {
         const zombies = allAfter.filter(p => p.state === 'zombie');
         const orphans = allAfter.filter(p => p.state === 'orphan');
+        const runningNormal = allAfter.filter(p => p.state === 'running' && !p.hasExited);
         
+        const summaryLogs: string[] = [];
         if (zombies.length > 0) {
-          setLogs(l => [...l, `[WARN] ${zombies.length} zombie process(es) remain!`]);
+          summaryLogs.push(`[WARN] 💀 ${zombies.length} zombie process(es) remain - parent never called wait()`);
         }
         if (orphans.length > 0) {
-          setLogs(l => [...l, `[INFO] ${orphans.length} orphan process(es) adopted by init`]);
+          summaryLogs.push(`[INFO] 👤 ${orphans.length} orphan process(es) adopted by init (still running)`);
+        }
+        if (runningNormal.length > 0 && zombies.length === 0 && orphans.length === 0) {
+          summaryLogs.push(`[INFO] ✓ All ${runningNormal.length} process(es) completed normally`);
         }
         
+        summaryLogs.push('[DONE] Simulation complete');
+        setLogs(l => [...l, ...summaryLogs]);
         setIsComplete(true);
-        setLogs(l => [...l, '[DONE] Simulation complete']);
       }
 
       return tree;
     });
 
     return statements[stepCount] || null;
-  }, [statements, stepCount]);
+  }, [statements, stepCount, isComplete]);
 
   // Reset simulation
   const reset = useCallback(() => {
@@ -317,7 +362,11 @@ export const useCodeSimulator = () => {
     if (processes.length === 0) return null;
     
     const all = getAllProcesses(processes);
-    const running = all.filter(p => p.state === 'running' && p.pc < statements.length);
+    const running = all.filter(p => 
+      p.state === 'running' && 
+      !p.hasExited && 
+      p.pc < statements.length
+    );
     
     if (running.length === 0) return null;
     return statements[running[0].pc] || null;
