@@ -62,14 +62,11 @@ export const Navigation = forwardRef<HTMLElement>((_, ref) => {
         </div>
 
         <div className="hidden md:flex items-center space-x-2 ml-auto">
-          <Link to="/theory">
-            <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground">
-              <BookOpen className="w-4 h-4" />
-              <span className="hidden lg:inline">Theory</span>
-            </Button>
-          </Link>
           <Link to="/help">
-            <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground">
+            <Button variant="ghost" size="sm" className={cn(
+              "gap-2 text-muted-foreground hover:text-foreground",
+              location.pathname === '/help' && 'bg-secondary text-foreground'
+            )}>
               <HelpCircle className="w-4 h-4" />
               <span className="hidden lg:inline">Help</span>
             </Button>
