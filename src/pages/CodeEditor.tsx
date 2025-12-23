@@ -24,7 +24,8 @@ const codeTemplates = [
 
 int main() {
     fork();
-    // No exit() or wait()
+    // Both parent and child continue running
+    // No exit, no wait - all processes stay alive
 }`,
   },
   {
@@ -36,8 +37,8 @@ int main() {
 
 int main() {
     fork();
-    exit(0);      // child
-    wait(NULL);   // parent
+    exit(0); // child: exits first
+    wait(NULL); // parent: waits and reaps child
 }`,
   },
   {
@@ -48,9 +49,9 @@ int main() {
 
 int main() {
     fork();
-    exit(0);  // child
-    // parent continues running and never calls wait()
-    sleep(1); // parent (ignored as hint; just a step)
+    exit(0); // child: exits
+    sleep(1); // parent: does NOT call wait()
+    // Child becomes zombie because parent didn't wait
 }`,
   },
   {
@@ -61,8 +62,8 @@ int main() {
 
 int main() {
     fork();
-    exit(0);   // parent
-    sleep(1);  // child (continues running)
+    exit(0); // parent: exits first
+    sleep(1); // child: continues running as orphan
 }`,
   },
   {
@@ -74,9 +75,9 @@ int main() {
 
 int main() {
     fork();
-    sleep(1);   // child reaches exit first
-    exit(0);    // child
-    wait(NULL); // parent
+    exit(0); // child: exits
+    wait(NULL); // parent: reaps child
+    // No zombie because parent waited
 }`,
   },
   {
@@ -88,6 +89,8 @@ int main() {
 int main() {
     fork();
     fork();
+    // 4 processes: original, child1, child2, grandchild
+    // All stay running - no exit calls
 }`,
   },
   {
@@ -100,6 +103,7 @@ int main() {
     fork();
     fork();
     fork();
+    // 8 processes total - all stay running
 }`,
   },
 ];
