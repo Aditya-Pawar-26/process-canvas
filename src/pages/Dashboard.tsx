@@ -52,6 +52,7 @@ const Dashboard = () => {
   const [lastAction, setLastAction] = useState<string>();
   const [osExplanation, setOsExplanation] = useState<string>();
   const [dsaExplanation, setDsaExplanation] = useState<string>();
+  const [selectedExitPid, setSelectedExitPid] = useState<number | null>(null);
 
   const runningCount = root ? getAllRunningProcesses(root).length : 0;
 
@@ -96,20 +97,24 @@ const Dashboard = () => {
     }
   }, [selectedNode, waitProcess]);
 
-  const handleExit = useCallback(() => {
-    if (selectedNode) {
-      const hasChildren = selectedNode.children.some(c => c.state === 'running');
-      exitProcess(selectedNode.pid);
-      setLastAction(`exit() called by PID ${selectedNode.pid}`);
-      if (hasChildren) {
-        setOsExplanation('Process exited with running children → children become ORPHANS. They are re-parented to init (PID 1) which will eventually wait() for them.');
-        setDsaExplanation('Deleting an internal node: children must be moved to another parent (init). Maintains tree integrity.');
-      } else {
-        setOsExplanation('Process exited. If parent was waiting → normal termination. If parent NOT waiting → becomes ZOMBIE until parent calls wait().');
-        setDsaExplanation('Leaf node removal. Node state changes but structure preserved until parent acknowledges.');
-      }
+  const handleExit = useCallback((pid?: number) => {
+    const targetPid = pid ?? selectedNode?.pid;
+    if (!targetPid) return;
+    
+    const targetNode = pid ? getAllRunningProcesses(root).find(p => p.pid === pid) ?? selectedNode : selectedNode;
+    if (!targetNode) return;
+    
+    const hasChildren = targetNode.children.some(c => c.state === 'running' || c.state === 'orphan');
+    exitProcess(targetPid);
+    setLastAction(`exit() called by PID ${targetPid}`);
+    if (hasChildren) {
+      setOsExplanation('Process exited with running children → children become ORPHANS. They are re-parented to init (PID 1) which will eventually wait() for them.');
+      setDsaExplanation('Deleting an internal node: children must be moved to another parent (init). Maintains tree integrity.');
+    } else {
+      setOsExplanation('Process exited. If parent was waiting → normal termination. If parent NOT waiting → becomes ZOMBIE until parent calls wait().');
+      setDsaExplanation('Leaf node removal. Node state changes but structure preserved until parent acknowledges.');
     }
-  }, [selectedNode, exitProcess]);
+  }, [selectedNode, root, exitProcess, getAllRunningProcesses]);
 
   // Handle scoped execution step
   const handleScopedStep = useCallback(() => {
@@ -345,7 +350,13 @@ const Dashboard = () => {
               />
             )}
             
-            <ConsoleLog logs={logs} />
+            <ConsoleLog 
+              logs={logs} 
+              root={root}
+              onExitProcess={handleExit}
+              selectedExitPid={selectedExitPid}
+              onSelectExitPid={setSelectedExitPid}
+            />
           </div>
 
           {/* Right Info Panel */}
