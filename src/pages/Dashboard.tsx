@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Navigation } from '@/components/Navigation';
 import { ControlPanel } from '@/components/ControlPanel';
 import { TreeVisualization } from '@/components/TreeVisualization';
@@ -8,7 +8,14 @@ import { useProcessTree } from '@/hooks/useProcessTree';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Footprints, AlertTriangle } from 'lucide-react';
+import { RotateCcw, Footprints, AlertTriangle, Play, Target, Maximize } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 const Dashboard = () => {
   const {
@@ -16,7 +23,12 @@ const Dashboard = () => {
     logs,
     selectedNode,
     forkCount,
+    executionMode,
+    executionBoundaryPid,
+    executedPids,
+    executionComplete,
     setSelectedNode,
+    setExecutionMode,
     createRootProcess,
     forkProcess,
     forkAllProcesses,
@@ -24,6 +36,10 @@ const Dashboard = () => {
     exitProcess,
     resetTree,
     getAllRunningProcesses,
+    getAncestorChain,
+    startScopedExecution,
+    executeNextScopedStep,
+    resetScopedExecution,
   } = useProcessTree();
 
   const [forkDepth, setForkDepth] = useState(3);
@@ -35,6 +51,17 @@ const Dashboard = () => {
 
   const runningCount = root ? getAllRunningProcesses(root).length : 0;
 
+  // Compute execution path PIDs for visualization
+  const executionPathPids = useMemo(() => {
+    if (executionMode === 'full' || !executionBoundaryPid) {
+      return new Set<number>();
+    }
+    return new Set(getAncestorChain(executionBoundaryPid));
+  }, [executionMode, executionBoundaryPid, getAncestorChain]);
+
+  // Is scoped execution active?
+  const isScopedExecution = executionMode === 'until-selected' && executionBoundaryPid !== null;
+
   const handleFork = useCallback(() => {
     if (!root) {
       createRootProcess();
@@ -42,7 +69,6 @@ const Dashboard = () => {
       setOsExplanation('The first user process is created. init (PID 1) already exists to adopt orphans.');
       setDsaExplanation('Root node of the process tree created. This is the ancestor of all child processes.');
     } else {
-      // CORRECT: Fork ALL running processes
       const newChildren = forkAllProcesses();
       const expectedTotal = Math.pow(2, forkCount + 1);
       setLastAction(`fork() called - ${newChildren.length} new processes created`);
@@ -80,6 +106,36 @@ const Dashboard = () => {
     }
   }, [selectedNode, exitProcess]);
 
+  // Handle scoped execution step
+  const handleScopedStep = useCallback(() => {
+    if (!isScopedExecution) return;
+    
+    const executedNode = executeNextScopedStep();
+    if (executedNode) {
+      setLastAction(`Executed step for PID ${executedNode.pid}`);
+      setOsExplanation(
+        `Hierarchical execution: Parent processes must execute before their children. This enforces UNIX process dependency rules.`
+      );
+      setDsaExplanation(
+        `Tree traversal follows the root-to-target path. Each node in the ancestor chain executes in order, demonstrating preorder traversal semantics.`
+      );
+    }
+  }, [isScopedExecution, executeNextScopedStep]);
+
+  // Start scoped execution for selected node
+  const handleStartScopedExecution = useCallback(() => {
+    if (selectedNode && executionMode === 'until-selected') {
+      startScopedExecution(selectedNode.pid);
+      setLastAction(`Started scoped execution until PID ${selectedNode.pid}`);
+      setOsExplanation(
+        `Scoped execution simulates partial process tree execution. Only the path from root to the selected node will be executed, demonstrating hierarchical dependency.`
+      );
+      setDsaExplanation(
+        `This is analogous to finding a path from root to target in a tree. Only ancestor nodes are visited.`
+      );
+    }
+  }, [selectedNode, executionMode, startScopedExecution]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -89,15 +145,17 @@ const Dashboard = () => {
         case 'f': handleFork(); break;
         case 'w': handleWait(); break;
         case 'x': handleExit(); break;
+        case 'n': if (isScopedExecution) handleScopedStep(); break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleFork, handleWait, handleExit]);
+  }, [handleFork, handleWait, handleExit, handleScopedStep, isScopedExecution]);
 
   const canWait = selectedNode?.state === 'running' && (selectedNode?.children.length ?? 0) > 0;
   const canKill = selectedNode?.state === 'running';
+  const canStartScoped = executionMode === 'until-selected' && selectedNode && !executionBoundaryPid;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -129,26 +187,117 @@ const Dashboard = () => {
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted/50 px-2 py-1 rounded">
-              <AlertTriangle className="w-3 h-3 text-yellow-500" />
+              <AlertTriangle className="w-3 h-3 text-process-waiting" />
               Execution order is scheduler-dependent
             </div>
-            <Button variant="ghost" size="sm" onClick={resetTree} className="gap-2">
+            <Button variant="ghost" size="sm" onClick={() => { resetTree(); resetScopedExecution(); }} className="gap-2">
               <RotateCcw className="w-4 h-4" /> Reset
             </Button>
           </div>
         </div>
       </div>
 
+      {/* Execution Mode Bar */}
+      <div className="border-b border-border bg-muted/30 px-4 py-2">
+        <div className="container flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-foreground">Execution Mode:</span>
+              <Select
+                value={executionMode}
+                onValueChange={(v) => {
+                  setExecutionMode(v as 'full' | 'until-selected');
+                  resetScopedExecution();
+                }}
+              >
+                <SelectTrigger className="w-[200px] h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="full">
+                    <div className="flex items-center gap-2">
+                      <Maximize className="w-4 h-4" />
+                      Run Full Execution
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="until-selected">
+                    <div className="flex items-center gap-2">
+                      <Target className="w-4 h-4" />
+                      Run Until Selected Node
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {executionMode === 'until-selected' && (
+              <div className="flex items-center gap-2">
+                {!executionBoundaryPid && selectedNode && (
+                  <Button 
+                    size="sm" 
+                    variant="default"
+                    onClick={handleStartScopedExecution}
+                    className="gap-1"
+                  >
+                    <Target className="w-4 h-4" />
+                    Set PID {selectedNode.pid} as boundary
+                  </Button>
+                )}
+                {!executionBoundaryPid && !selectedNode && (
+                  <span className="text-sm text-muted-foreground">
+                    Select a node to set as execution boundary
+                  </span>
+                )}
+                {executionBoundaryPid && (
+                  <>
+                    <Badge variant="outline" className="font-mono">
+                      <Target className="w-3 h-3 mr-1" />
+                      Boundary: PID {executionBoundaryPid}
+                    </Badge>
+                    <Badge variant="secondary" className="font-mono">
+                      Path: {getAncestorChain(executionBoundaryPid).join(' → ')}
+                    </Badge>
+                    {!executionComplete && (
+                      <Button 
+                        size="sm" 
+                        variant="default"
+                        onClick={handleScopedStep}
+                        className="gap-1"
+                      >
+                        <Play className="w-4 h-4" />
+                        Execute Next (N)
+                      </Button>
+                    )}
+                    {executionComplete && (
+                      <Badge variant="default" className="bg-process-running text-process-running-foreground">
+                        ✓ Execution Complete
+                      </Badge>
+                    )}
+                    <Button 
+                      size="sm" 
+                      variant="outline"
+                      onClick={resetScopedExecution}
+                    >
+                      Clear Boundary
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Main Layout */}
       <div className="flex-1 container py-4">
-        <div className="grid grid-cols-12 gap-4 h-[calc(100vh-180px)]">
+        <div className="grid grid-cols-12 gap-4 h-[calc(100vh-240px)]">
           {/* Left Control Panel */}
           <div className="col-span-12 md:col-span-3 lg:col-span-2">
             <ControlPanel
               onFork={handleFork}
               onWait={handleWait}
               onKill={handleExit}
-              onReset={resetTree}
+              onReset={() => { resetTree(); resetScopedExecution(); }}
               forkDepth={forkDepth}
               setForkDepth={setForkDepth}
               speed={speed}
@@ -169,6 +318,9 @@ const Dashboard = () => {
                 onFork={(pid) => forkProcess(pid)}
                 onWait={(pid) => waitProcess(pid)}
                 onExit={(pid) => exitProcess(pid)}
+                executionPathPids={executionPathPids}
+                executedPids={executedPids}
+                isScopedExecution={isScopedExecution}
               />
             </div>
             <ConsoleLog logs={logs} />

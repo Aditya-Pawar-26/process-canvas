@@ -14,10 +14,12 @@ import {
 } from '@/components/ui/tooltip';
 import { GitFork, Clock, X, Eye, Skull, UserX } from 'lucide-react';
 
-interface ProcessNodeCardProps {
+export interface ProcessNodeCardProps {
   node: ProcessNode;
   isSelected: boolean;
   isHighlighted?: boolean;
+  isDimmed?: boolean;
+  isExecuted?: boolean;
   onSelect: (node: ProcessNode) => void;
   onFork: (pid: number) => void;
   onWait: (pid: number) => void;
@@ -28,6 +30,8 @@ export const ProcessNodeCard = ({
   node,
   isSelected,
   isHighlighted,
+  isDimmed,
+  isExecuted,
   onSelect,
   onFork,
   onWait,
@@ -96,8 +100,10 @@ export const ProcessNodeCard = ({
                   stateColors[node.state],
                   isSelected && 'ring-2 ring-primary ring-offset-2 ring-offset-background',
                   isHighlighted && 'animate-pulse-glow',
+                  isExecuted && 'ring-2 ring-process-running/50 ring-offset-1',
                   node.state === 'orphan' && 'border-dashed',
-                  node.state === 'zombie' && 'border-dotted'
+                  node.state === 'zombie' && 'border-dotted',
+                  isDimmed && 'grayscale'
                 )}
               >
                 <div className="text-center">

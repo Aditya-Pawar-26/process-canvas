@@ -6,6 +6,9 @@ interface TreeVisualizationProps {
   root: ProcessNode | null;
   selectedNode: ProcessNode | null;
   highlightedNodeId?: string | null;
+  executionPathPids?: Set<number>;
+  executedPids?: Set<number>;
+  isScopedExecution?: boolean;
   onSelectNode: (node: ProcessNode) => void;
   onFork: (pid: number) => void;
   onWait: (pid: number) => void;
@@ -27,11 +30,26 @@ export const TreeVisualization = ({
   root,
   selectedNode,
   highlightedNodeId,
+  executionPathPids,
+  executedPids,
+  isScopedExecution = false,
   onSelectNode,
   onFork,
   onWait,
   onExit,
 }: TreeVisualizationProps) => {
+
+  // Determine if a node should be dimmed (outside execution path)
+  const shouldDimNode = (node: ProcessNode): boolean => {
+    if (!isScopedExecution || !executionPathPids) return false;
+    return !executionPathPids.has(node.pid);
+  };
+
+  // Determine if a node has been executed in scoped mode
+  const isNodeExecuted = (node: ProcessNode): boolean => {
+    if (!isScopedExecution || !executedPids) return false;
+    return executedPids.has(node.pid);
+  };
 
   // Calculate positions using Reingold-Tilford style algorithm
   const positions = useMemo(() => {
@@ -160,6 +178,9 @@ export const TreeVisualization = ({
             // Smooth bezier curve from bottom-center of parent to top-center of child
             const midY = (y1 + y2) / 2;
 
+            // Dim edges for nodes outside execution path
+            const isEdgeDimmed = shouldDimNode(edge.from.node) || shouldDimNode(edge.to.node);
+
             return (
               <path
                 key={i}
@@ -167,7 +188,7 @@ export const TreeVisualization = ({
                 fill="none"
                 stroke="hsl(var(--primary))"
                 strokeWidth="2"
-                strokeOpacity="0.6"
+                strokeOpacity={isEdgeDimmed ? 0.15 : 0.6}
                 className="transition-all duration-300"
               />
             );
@@ -175,23 +196,30 @@ export const TreeVisualization = ({
         </svg>
 
         {/* Node cards */}
-        {positions.map((pos) => (
-          <div
-            key={pos.node.id}
-            className="absolute transition-all duration-500"
-            style={{ left: pos.x, top: pos.y }}
-          >
-            <ProcessNodeCard
-              node={pos.node}
-              isSelected={selectedNode?.id === pos.node.id}
-              isHighlighted={highlightedNodeId === pos.node.id}
-              onSelect={onSelectNode}
-              onFork={onFork}
-              onWait={onWait}
-              onExit={onExit}
-            />
-          </div>
-        ))}
+        {positions.map((pos) => {
+          const isDimmed = shouldDimNode(pos.node);
+          const isExecuted = isNodeExecuted(pos.node);
+          
+          return (
+            <div
+              key={pos.node.id}
+              className={`absolute transition-all duration-500 ${isDimmed ? 'opacity-25 pointer-events-none' : ''}`}
+              style={{ left: pos.x, top: pos.y }}
+            >
+              <ProcessNodeCard
+                node={pos.node}
+                isSelected={selectedNode?.id === pos.node.id}
+                isHighlighted={highlightedNodeId === pos.node.id || isExecuted}
+                isDimmed={isDimmed}
+                isExecuted={isExecuted}
+                onSelect={onSelectNode}
+                onFork={onFork}
+                onWait={onWait}
+                onExit={onExit}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );

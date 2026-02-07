@@ -7,12 +7,18 @@ let logIdCounter = 0;
 const generatePid = () => ++pidCounter;
 const generateLogId = () => `log-${++logIdCounter}`;
 
+export type ExecutionMode = 'full' | 'until-selected';
+
 export const useProcessTree = () => {
   const [root, setRoot] = useState<ProcessNode | null>(null);
   const [initProcess, setInitProcess] = useState<ProcessNode | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
   const [forkCount, setForkCount] = useState(0);
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('full');
+  const [executionBoundaryPid, setExecutionBoundaryPid] = useState<number | null>(null);
+  const [executedPids, setExecutedPids] = useState<Set<number>>(new Set());
+  const [executionComplete, setExecutionComplete] = useState(false);
 
   const addLog = useCallback((type: LogEntry['type'], message: string, pid?: number) => {
     const entry: LogEntry = {
@@ -463,6 +469,94 @@ export const useProcessTree = () => {
     setSelectedNode(null);
     setLogs([]);
     setForkCount(0);
+    setExecutionBoundaryPid(null);
+    setExecutedPids(new Set());
+    setExecutionComplete(false);
+  }, []);
+
+  // Get ancestor chain (path from root to target node)
+  const getAncestorChain = useCallback((targetPid: number): number[] => {
+    if (!root) return [];
+    
+    const path: number[] = [];
+    
+    const findPath = (node: ProcessNode, target: number, currentPath: number[]): boolean => {
+      currentPath.push(node.pid);
+      
+      if (node.pid === target) {
+        path.push(...currentPath);
+        return true;
+      }
+      
+      for (const child of node.children) {
+        if (findPath(child, target, [...currentPath])) {
+          return true;
+        }
+      }
+      
+      return false;
+    };
+    
+    findPath(root, targetPid, []);
+    return path;
+  }, [root]);
+
+  // Check if a node is in the execution path (for visual dimming)
+  const isInExecutionPath = useCallback((pid: number): boolean => {
+    if (executionMode === 'full') return true;
+    if (!executionBoundaryPid) return true;
+    
+    const ancestorChain = getAncestorChain(executionBoundaryPid);
+    return ancestorChain.includes(pid);
+  }, [executionMode, executionBoundaryPid, getAncestorChain]);
+
+  // Start node-scoped execution
+  const startScopedExecution = useCallback((targetPid: number) => {
+    setExecutionBoundaryPid(targetPid);
+    setExecutedPids(new Set());
+    setExecutionComplete(false);
+    addLog('info', `Starting scoped execution until PID ${targetPid}`, targetPid);
+    
+    const ancestorChain = getAncestorChain(targetPid);
+    if (ancestorChain.length > 0) {
+      addLog('info', `Execution path: ${ancestorChain.join(' → ')}`, undefined);
+    }
+  }, [getAncestorChain, addLog]);
+
+  // Execute next step in scoped execution (hierarchical order)
+  const executeNextScopedStep = useCallback(() => {
+    if (!root || !executionBoundaryPid || executionComplete) return null;
+    
+    const ancestorChain = getAncestorChain(executionBoundaryPid);
+    
+    // Find next node to execute (first in chain that hasn't been executed)
+    for (const pid of ancestorChain) {
+      if (!executedPids.has(pid)) {
+        setExecutedPids(prev => new Set([...prev, pid]));
+        
+        const node = findNode(root, pid);
+        if (node) {
+          addLog('success', `Executed step for PID ${pid}`, pid);
+          
+          // Check if we've reached the boundary
+          if (pid === executionBoundaryPid) {
+            setExecutionComplete(true);
+            addLog('info', `Scoped execution complete at PID ${pid}`, pid);
+          }
+          
+          return node;
+        }
+      }
+    }
+    
+    return null;
+  }, [root, executionBoundaryPid, executionComplete, executedPids, getAncestorChain, findNode, addLog]);
+
+  // Reset scoped execution state
+  const resetScopedExecution = useCallback(() => {
+    setExecutionBoundaryPid(null);
+    setExecutedPids(new Set());
+    setExecutionComplete(false);
   }, []);
 
   const getAllNodes = useCallback((node: ProcessNode | null): ProcessNode[] => {
@@ -476,10 +570,15 @@ export const useProcessTree = () => {
     logs,
     selectedNode,
     forkCount,
+    executionMode,
+    executionBoundaryPid,
+    executedPids,
+    executionComplete,
     setSelectedNode,
+    setExecutionMode,
     createRootProcess,
     forkProcess,
-    forkAllProcesses, // NEW: Correct fork semantics
+    forkAllProcesses,
     waitProcess,
     exitProcess,
     resetTree,
@@ -487,5 +586,10 @@ export const useProcessTree = () => {
     getAllNodes,
     getAllRunningProcesses,
     addLog,
+    getAncestorChain,
+    isInExecutionPath,
+    startScopedExecution,
+    executeNextScopedStep,
+    resetScopedExecution,
   };
 };
