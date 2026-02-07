@@ -4,6 +4,7 @@ import { ControlPanel } from '@/components/ControlPanel';
 import { TreeVisualization } from '@/components/TreeVisualization';
 import { InfoPanel } from '@/components/InfoPanel';
 import { ConsoleLog } from '@/components/ConsoleLog';
+import { ExecutionTimeline } from '@/components/ExecutionTimeline';
 import { useProcessTree } from '@/hooks/useProcessTree';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -331,6 +332,19 @@ const Dashboard = () => {
                 isScopedExecution={isScopedExecution}
               />
             </div>
+            
+            {/* Execution Timeline - only show during scoped execution */}
+            {isScopedExecution && executionPath.length > 0 && (
+              <ExecutionTimeline
+                executionPath={executionPath}
+                executedPids={executedPids}
+                currentExecutingPid={currentExecutingPid}
+                logicalTime={logicalTime}
+                executionComplete={executionComplete}
+                boundaryPid={executionBoundaryPid}
+              />
+            )}
+            
             <ConsoleLog logs={logs} />
           </div>
 
