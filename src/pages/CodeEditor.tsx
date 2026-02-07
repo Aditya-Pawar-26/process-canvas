@@ -6,7 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Play, RotateCcw, Pause, SkipForward, Code, Terminal, Info, Skull, UserX } from 'lucide-react';
+import { Slider } from '@/components/ui/slider';
+import { Play, RotateCcw, Pause, SkipForward, Code, Terminal, Info, Skull, UserX, Gauge } from 'lucide-react';
 import { useCodeSimulator, SimProcess } from '@/hooks/useCodeSimulator';
 
 // Each template has DISTINCT code that produces DIFFERENT OS outcomes.
@@ -112,6 +113,7 @@ export default function CodeEditor() {
   const [selectedTemplate, setSelectedTemplate] = useState<string>(codeTemplates[0].id);
   const [code, setCode] = useState(codeTemplates[0].code);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1000);
   
   const {
     processes,
@@ -165,12 +167,12 @@ export default function CodeEditor() {
     if (isPlaying && !isComplete) {
       const timer = setTimeout(() => {
         executeStep();
-      }, 800);
+      }, speed);
       return () => clearTimeout(timer);
     } else if (isComplete) {
       setIsPlaying(false);
     }
-  }, [isPlaying, isComplete, executeStep, stepCount]);
+  }, [isPlaying, isComplete, executeStep, stepCount, speed]);
 
   const currentStatement = getCurrentStatement();
   const currentLine = currentStatement?.lineNumber ?? -1;
@@ -332,26 +334,44 @@ export default function CodeEditor() {
               </div>
 
               {/* Controls */}
-              <div className="flex gap-2 mt-4">
-                {isPlaying ? (
-                  <Button onClick={handlePause} variant="outline" className="gap-2">
-                    <Pause className="w-4 h-4" />
-                    Pause
+              <div className="flex flex-wrap items-center gap-4 mt-4">
+                <div className="flex gap-2">
+                  {isPlaying ? (
+                    <Button onClick={handlePause} variant="outline" className="gap-2">
+                      <Pause className="w-4 h-4" />
+                      Pause
+                    </Button>
+                  ) : (
+                    <Button onClick={handleRun} className="gap-2 glow-primary" disabled={isComplete}>
+                      <Play className="w-4 h-4" />
+                      {processes.length === 0 ? 'Run' : 'Continue'}
+                    </Button>
+                  )}
+                  <Button onClick={handleStep} variant="outline" className="gap-2" disabled={isComplete}>
+                    <SkipForward className="w-4 h-4" />
+                    Step
                   </Button>
-                ) : (
-                  <Button onClick={handleRun} className="gap-2 glow-primary" disabled={isComplete}>
-                    <Play className="w-4 h-4" />
-                    {processes.length === 0 ? 'Run' : 'Continue'}
+                  <Button onClick={handleReset} variant="outline" className="gap-2">
+                    <RotateCcw className="w-4 h-4" />
+                    Reset
                   </Button>
-                )}
-                <Button onClick={handleStep} variant="outline" className="gap-2" disabled={isComplete}>
-                  <SkipForward className="w-4 h-4" />
-                  Step
-                </Button>
-                <Button onClick={handleReset} variant="outline" className="gap-2">
-                  <RotateCcw className="w-4 h-4" />
-                  Reset
-                </Button>
+                </div>
+
+                {/* Speed Control */}
+                <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+                  <Gauge className="w-4 h-4 text-muted-foreground" />
+                  <Slider
+                    value={[speed]}
+                    onValueChange={([v]) => setSpeed(v)}
+                    min={200}
+                    max={6000}
+                    step={100}
+                    className="flex-1"
+                  />
+                  <span className="text-xs text-muted-foreground font-mono w-14 text-right">
+                    {(speed / 1000).toFixed(1)}s
+                  </span>
+                </div>
               </div>
 
               {/* Process Stats */}
