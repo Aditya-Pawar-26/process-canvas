@@ -229,8 +229,15 @@ const GanttChart = () => {
     return result;
   }, []);
 
-  // Voice mode delay: 1.5 seconds when enabled, otherwise use speed slider
-  const effectiveSpeed = voiceModeEnabled ? Math.max(speed, 1500) : speed;
+  // Auto-set speed to 6 seconds when voice mode is enabled
+  useEffect(() => {
+    if (voiceModeEnabled) {
+      setSpeed(6000);
+    }
+  }, [voiceModeEnabled, setSpeed]);
+
+  // Use speed directly (already set to 6s when voice mode on)
+  const effectiveSpeed = speed;
 
   // Auto-play effect (UNIX-correct bottom-up)
   useEffect(() => {
@@ -454,7 +461,7 @@ const GanttChart = () => {
               value={[speed]}
               onValueChange={([v]) => setSpeed(v)}
               min={200}
-              max={5000}
+              max={6000}
               step={100}
               className="w-32"
             />
