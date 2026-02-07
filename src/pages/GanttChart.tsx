@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   TreeDeciduous,
   ChevronRight,
+  Cpu,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -27,9 +28,10 @@ interface GanttBarProps {
   state: 'running' | 'waiting' | 'zombie' | 'orphan' | 'terminated' | 'none';
   isSelected: boolean;
   onClick: () => void;
+  getCpuOwnerAtTime: (time: number) => number | null;
 }
 
-const GanttBar = ({ pid, events, maxTime, currentTime, state, isSelected, onClick }: GanttBarProps) => {
+const GanttBar = ({ pid, events, maxTime, currentTime, state, isSelected, onClick, getCpuOwnerAtTime }: GanttBarProps) => {
   const timeSlots = maxTime + 1;
   
   // Build time-based state array
@@ -57,7 +59,10 @@ const GanttBar = ({ pid, events, maxTime, currentTime, state, isSelected, onClic
     return states;
   }, [events, timeSlots, currentTime]);
   
-  const getStateColor = (s: ExecutionEvent['state'] | null) => {
+  const getStateColor = (s: ExecutionEvent['state'] | null, isCpuOwner: boolean) => {
+    if (isCpuOwner) {
+      return 'bg-primary'; // CPU owner gets special primary color
+    }
     switch (s) {
       case 'running': return 'bg-process-running';
       case 'orphan': return 'bg-process-orphan';
@@ -95,18 +100,32 @@ const GanttBar = ({ pid, events, maxTime, currentTime, state, isSelected, onClic
       
       {/* Gantt bar */}
       <div className="flex-1 flex gap-px">
-        {stateAtTime.map((s, t) => (
-          <div
-            key={t}
-            className={cn(
-              "h-8 min-w-[30px] flex-1 rounded-sm transition-all",
-              getStateColor(s),
-              t === currentTime && s && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
-              !s && "border border-dashed border-border"
-            )}
-            title={`t=${t}: ${s || 'inactive'}`}
-          />
-        ))}
+        {stateAtTime.map((s, t) => {
+          const cpuOwner = getCpuOwnerAtTime(t);
+          const isCpuOwner = cpuOwner === pid && (s === 'running' || s === 'orphan');
+          const isCurrentTime = t === currentTime;
+          
+          return (
+            <div
+              key={t}
+              className={cn(
+                "h-8 min-w-[30px] flex-1 rounded-sm transition-all relative",
+                getStateColor(s, isCpuOwner),
+                isCurrentTime && s && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
+                isCpuOwner && "shadow-lg shadow-primary/50",
+                !s && "border border-dashed border-border"
+              )}
+              title={`t=${t}: ${s || 'inactive'}${isCpuOwner ? ' (CPU Owner)' : ''}`}
+            >
+              {/* CPU icon for owner */}
+              {isCpuOwner && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Cpu className="w-4 h-4 text-primary-foreground" />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -120,6 +139,7 @@ const GanttChart = () => {
     forkCount,
     globalLogicalTime,
     executionHistory,
+    currentCpuOwner,
     isAutoPlaying,
     speed,
     setSelectedNode,
@@ -134,6 +154,8 @@ const GanttChart = () => {
     recordExecution,
     incrementGlobalTime,
     resetExecutionHistory,
+    setCpuOwner,
+    getCpuOwnerAtTime,
   } = useProcessTreeContext();
   
   // Get all processes for the Y-axis
@@ -223,6 +245,12 @@ const GanttChart = () => {
         const deepestParent = parentsNotWaiting.reduce((a, b) => a.depth > b.depth ? a : b);
         waitProcess(deepestParent.pid);
         recordExecution(deepestParent.pid, 'wait', 'waiting');
+        
+        // Set CPU owner to a running process (if any)
+        const running = getAllRunningProcesses(root).filter(p => p.state === 'running' || p.state === 'orphan');
+        if (running.length > 0) {
+          setCpuOwner(running[0].pid);
+        }
         return;
       }
       
@@ -230,6 +258,10 @@ const GanttChart = () => {
       
       if (leaves.length > 0) {
         const deepestLeaf = leaves.reduce((a, b) => a.depth > b.depth ? a : b);
+        
+        // This process gets CPU before exiting
+        setCpuOwner(deepestLeaf.pid);
+        
         exitProcess(deepestLeaf.pid);
         recordExecution(deepestLeaf.pid, 'exit', 'terminated');
         return;
@@ -239,7 +271,7 @@ const GanttChart = () => {
     }, speed);
 
     return () => clearInterval(intervalId);
-  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying]);
+  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying, getAllRunningProcesses, setCpuOwner]);
 
   // Execute single step
   const executeNextStep = useCallback(() => {
@@ -253,6 +285,12 @@ const GanttChart = () => {
       const deepestParent = parentsNotWaiting.reduce((a, b) => a.depth > b.depth ? a : b);
       waitProcess(deepestParent.pid);
       recordExecution(deepestParent.pid, 'wait', 'waiting');
+      
+      // Set CPU owner to a running process (if any)
+      const running = getAllRunningProcesses(root).filter(p => p.state === 'running' || p.state === 'orphan');
+      if (running.length > 0) {
+        setCpuOwner(running[0].pid);
+      }
       return;
     }
     
@@ -260,10 +298,14 @@ const GanttChart = () => {
     
     if (leaves.length > 0) {
       const deepestLeaf = leaves.reduce((a, b) => a.depth > b.depth ? a : b);
+      
+      // This process gets CPU before exiting
+      setCpuOwner(deepestLeaf.pid);
+      
       exitProcess(deepestLeaf.pid);
       recordExecution(deepestLeaf.pid, 'exit', 'terminated');
     }
-  }, [root, incrementGlobalTime, getParentsNotWaiting, getLeafProcesses, waitProcess, exitProcess, recordExecution]);
+  }, [root, incrementGlobalTime, getParentsNotWaiting, getLeafProcesses, waitProcess, exitProcess, recordExecution, getAllRunningProcesses, setCpuOwner]);
 
   const handlePlayPause = useCallback(() => {
     setIsAutoPlaying(!isAutoPlaying);
@@ -438,18 +480,39 @@ const GanttChart = () => {
           </div>
         ) : (
           <div className="bg-card border border-border rounded-xl p-4">
-            {/* Time axis header */}
+            {/* Current CPU Owner Banner */}
+            {currentCpuOwner !== null && (
+              <div className="mb-4 p-3 bg-primary/10 border border-primary/30 rounded-lg flex items-center gap-3">
+                <div className="p-2 bg-primary rounded-full">
+                  <Cpu className="w-4 h-4 text-primary-foreground" />
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-foreground">CPU Owner at t={globalLogicalTime}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Process <span className="font-mono font-bold text-primary">PID {currentCpuOwner}</span> is currently executing on the CPU
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Time axis header with vertical cursor indicator */}
             <div className="flex items-center gap-2 mb-4 ml-[88px]">
-              <div className="flex-1 flex gap-px">
+              <div className="flex-1 flex gap-px relative">
                 {Array.from({ length: maxDisplayTime }, (_, t) => (
                   <div
                     key={t}
                     className={cn(
-                      "min-w-[30px] flex-1 text-center text-xs font-mono",
+                      "min-w-[30px] flex-1 text-center text-xs font-mono relative",
                       t === globalLogicalTime ? "text-primary font-bold" : "text-muted-foreground"
                     )}
                   >
                     {t}
+                    {/* Current time marker */}
+                    {t === globalLogicalTime && (
+                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1">
+                        <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-primary" />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -460,8 +523,20 @@ const GanttChart = () => {
               <span className="text-xs text-muted-foreground">Logical Time (t)</span>
             </div>
             
-            {/* Process rows */}
-            <div className="space-y-1">
+            {/* Process rows with vertical time cursor */}
+            <div className="space-y-1 relative">
+              {/* Vertical time cursor line */}
+              <div 
+                className="absolute top-0 bottom-0 w-0.5 bg-primary/60 z-10 pointer-events-none transition-all"
+                style={{
+                  left: `calc(88px + ${globalLogicalTime} * (100% - 88px) / ${maxDisplayTime} + (100% - 88px) / ${maxDisplayTime} / 2 - 1px)`
+                }}
+              >
+                <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 bg-primary text-primary-foreground text-[10px] font-mono rounded">
+                  t={globalLogicalTime}
+                </div>
+              </div>
+              
               {allProcesses.map(process => (
                 <GanttBar
                   key={process.pid}
@@ -472,15 +547,23 @@ const GanttChart = () => {
                   state={process.state}
                   isSelected={selectedNode?.pid === process.pid}
                   onClick={() => setSelectedNode(process)}
+                  getCpuOwnerAtTime={getCpuOwnerAtTime}
                 />
               ))}
             </div>
             
             {/* Legend */}
-            <div className="mt-6 pt-4 border-t border-border flex items-center gap-6 text-xs text-muted-foreground">
+            <div className="mt-6 pt-4 border-t border-border flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded-sm bg-primary flex items-center justify-center">
+                  <Cpu className="w-2.5 h-2.5 text-primary-foreground" />
+                </div>
+                <span className="font-medium text-foreground">CPU Owner</span>
+              </div>
+              <div className="w-px h-4 bg-border" />
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 rounded-sm bg-process-running" />
-                <span>Running</span>
+                <span>Running (Ready)</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 rounded-sm bg-process-waiting" />
