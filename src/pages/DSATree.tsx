@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDSATree, DSANode } from '@/hooks/useDSATree';
-import { useProcessTree } from '@/hooks/useProcessTree';
+import { useProcessTreeContext } from '@/contexts/ProcessTreeContext';
 import { UnifiedTreeVisualization } from '@/components/UnifiedTreeVisualization';
 import { dsaTreeToUnifiedTree, getTreeStats, osTreeConcepts } from '@/utils/treeConversions';
 import { UnifiedTreeNode } from '@/types/tree';
@@ -36,7 +36,7 @@ const DSATree = () => {
     importFromProcessTree
   } = useDSATree();
 
-  const { root: processRoot, forkAllProcesses, createRootProcess, resetTree: resetProcessTree } = useProcessTree();
+  const { root: processRoot, forkAllProcesses, createRootProcess, resetTree: resetProcessTree } = useProcessTreeContext();
 
   const [newValue, setNewValue] = useState<string>('');
   const [traversalResult, setTraversalResult] = useState<DSANode[]>([]);
