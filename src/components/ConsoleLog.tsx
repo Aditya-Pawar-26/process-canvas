@@ -1,9 +1,10 @@
 import { LogEntry, ProcessNode } from '@/types/process';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Terminal, Power } from 'lucide-react';
+import { Terminal, Power, Play, Pause } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEffect, useRef, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
 import {
   Select,
   SelectContent,
@@ -18,6 +19,11 @@ interface ConsoleLogProps {
   onExitProcess?: (pid: number) => void;
   selectedExitPid?: number | null;
   onSelectExitPid?: (pid: number | null) => void;
+  isAutoPlaying?: boolean;
+  onPlayPause?: () => void;
+  speed?: number;
+  onSpeedChange?: (speed: number) => void;
+  hasRunningProcesses?: boolean;
 }
 
 // Helper to collect all running processes from tree
@@ -38,7 +44,12 @@ export const ConsoleLog = ({
   root, 
   onExitProcess,
   selectedExitPid,
-  onSelectExitPid 
+  onSelectExitPid,
+  isAutoPlaying = false,
+  onPlayPause,
+  speed = 1000,
+  onSpeedChange,
+  hasRunningProcesses = false,
 }: ConsoleLogProps) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -89,6 +100,46 @@ export const ConsoleLog = ({
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-secondary/30">
         <Terminal className="w-4 h-4 text-primary" />
         <span className="text-sm font-medium">Console Output</span>
+        
+        {/* Play/Pause Controls */}
+        {onPlayPause && hasRunningProcesses && (
+          <div className="flex items-center gap-2 ml-4 border-l border-border pl-4">
+            <Button
+              size="sm"
+              variant={isAutoPlaying ? 'secondary' : 'default'}
+              onClick={onPlayPause}
+              className="h-7 gap-1"
+            >
+              {isAutoPlaying ? (
+                <>
+                  <Pause className="w-3 h-3" />
+                  Pause
+                </>
+              ) : (
+                <>
+                  <Play className="w-3 h-3" />
+                  Play
+                </>
+              )}
+            </Button>
+            {onSpeedChange && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Speed:</span>
+                <Slider
+                  value={[speed]}
+                  onValueChange={(v) => onSpeedChange(v[0])}
+                  min={200}
+                  max={2000}
+                  step={100}
+                  className="w-16"
+                  disabled={isAutoPlaying}
+                />
+                <span className="text-xs font-mono text-muted-foreground w-10">{speed}ms</span>
+              </div>
+            )}
+          </div>
+        )}
+        
         <span className="text-xs text-muted-foreground ml-auto">
           {logs.length} entries
         </span>

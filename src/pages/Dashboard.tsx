@@ -9,7 +9,7 @@ import { useProcessTree } from '@/hooks/useProcessTree';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Footprints, AlertTriangle, Play, Pause, Target, Maximize } from 'lucide-react';
+import { RotateCcw, Footprints, AlertTriangle, Play, Target, Maximize } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -17,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Slider } from '@/components/ui/slider';
 
 const Dashboard = () => {
   const {
@@ -45,13 +44,11 @@ const Dashboard = () => {
     startScopedExecution,
     executeNextScopedStep,
     resetScopedExecution,
-    isAutoPlaying,
-    startAutoPlay,
-    pauseAutoPlay,
   } = useProcessTree();
 
   const [forkDepth, setForkDepth] = useState(3);
   const [speed, setSpeed] = useState(1000); // ms between auto-steps
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [stepMode, setStepMode] = useState(false);
   const [lastAction, setLastAction] = useState<string>();
   const [osExplanation, setOsExplanation] = useState<string>();
@@ -150,6 +147,50 @@ const Dashboard = () => {
     }
   }, [selectedNode, executionMode, startScopedExecution]);
 
+  // Auto-play effect: automatically fork/wait/exit through lifecycle
+  useEffect(() => {
+    if (!isAutoPlaying || !root) return;
+
+    const runningProcesses = getAllRunningProcesses(root);
+    
+    // Stop if no more running processes
+    if (runningProcesses.length === 0) {
+      setIsAutoPlaying(false);
+      setLastAction('Auto-execution complete - no more running processes');
+      setOsExplanation('All processes have terminated. The simulation has reached a stable state.');
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      const currentRunning = getAllRunningProcesses(root);
+      if (currentRunning.length === 0) {
+        setIsAutoPlaying(false);
+        return;
+      }
+
+      // Pick a random running process to exit (simulates scheduler non-determinism)
+      const randomIndex = Math.floor(Math.random() * currentRunning.length);
+      const processToExit = currentRunning[randomIndex];
+      
+      exitProcess(processToExit.pid);
+      setLastAction(`Auto: exit() called by PID ${processToExit.pid}`);
+    }, speed);
+
+    return () => clearInterval(intervalId);
+  }, [isAutoPlaying, root, speed, getAllRunningProcesses, exitProcess]);
+
+  const handlePlayPause = useCallback(() => {
+    if (isAutoPlaying) {
+      setIsAutoPlaying(false);
+      setLastAction('Auto-execution paused');
+      setOsExplanation('Execution paused. Press Play to resume automatic process lifecycle execution.');
+    } else {
+      setIsAutoPlaying(true);
+      setLastAction('Auto-execution started');
+      setOsExplanation('Processes will exit automatically according to the scheduler. Parent-child dependencies will be enforced with UNIX semantics (zombies, orphans, reaping).');
+    }
+  }, [isAutoPlaying]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -160,30 +201,20 @@ const Dashboard = () => {
         case 'w': handleWait(); break;
         case 'x': handleExit(); break;
         case 'n': if (isScopedExecution) handleScopedStep(); break;
+        case ' ': 
+          e.preventDefault(); // Prevent page scroll
+          if (runningCount > 0) handlePlayPause(); 
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleFork, handleWait, handleExit, handleScopedStep, isScopedExecution]);
+  }, [handleFork, handleWait, handleExit, handleScopedStep, handlePlayPause, isScopedExecution, runningCount]);
 
   const canWait = selectedNode?.state === 'running' && (selectedNode?.children.length ?? 0) > 0;
   const canKill = selectedNode?.state === 'running';
   const canStartScoped = executionMode === 'until-selected' && selectedNode && !executionBoundaryPid;
-
-  // Auto-play effect: advance execution at interval
-  useEffect(() => {
-    if (!isAutoPlaying || executionComplete) return;
-
-    const intervalId = setInterval(() => {
-      const result = executeNextScopedStep();
-      if (!result) {
-        pauseAutoPlay();
-      }
-    }, speed);
-
-    return () => clearInterval(intervalId);
-  }, [isAutoPlaying, executionComplete, speed, executeNextScopedStep, pauseAutoPlay]);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -289,56 +320,21 @@ const Dashboard = () => {
                       Path: {executionPath.join(' → ')}
                     </Badge>
                     {!executionComplete && (
-                      <>
-                        {isAutoPlaying ? (
-                          <Button 
-                            size="sm" 
-                            variant="secondary"
-                            onClick={pauseAutoPlay}
-                            className="gap-1"
-                          >
-                            <Pause className="w-4 h-4" />
-                            Pause
-                          </Button>
-                        ) : (
-                          <Button 
-                            size="sm" 
-                            variant="default"
-                            onClick={startAutoPlay}
-                            className="gap-1"
-                          >
-                            <Play className="w-4 h-4" />
-                            Play
-                          </Button>
-                        )}
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={handleScopedStep}
-                          disabled={isAutoPlaying}
-                          className="gap-1"
-                        >
-                          Step (N)
-                        </Button>
-                      </>
+                      <Button 
+                        size="sm" 
+                        variant="default"
+                        onClick={handleScopedStep}
+                        className="gap-1"
+                      >
+                        <Play className="w-4 h-4" />
+                        Execute Next (N)
+                      </Button>
                     )}
                     {executionComplete && (
                       <Badge variant="default" className="bg-process-running text-process-running-foreground">
                         ✓ Execution Complete
                       </Badge>
                     )}
-                    <div className="flex items-center gap-2 ml-2 border-l border-border pl-2">
-                      <span className="text-xs text-muted-foreground">Speed:</span>
-                      <Slider
-                        value={[speed]}
-                        onValueChange={(v) => setSpeed(v[0])}
-                        min={200}
-                        max={2000}
-                        step={100}
-                        className="w-20"
-                      />
-                      <span className="text-xs font-mono text-muted-foreground w-12">{speed}ms</span>
-                    </div>
                     <Button 
                       size="sm" 
                       variant="outline"
@@ -400,7 +396,6 @@ const Dashboard = () => {
                 logicalTime={logicalTime}
                 executionComplete={executionComplete}
                 boundaryPid={executionBoundaryPid}
-                isAutoPlaying={isAutoPlaying}
               />
             )}
             
@@ -410,6 +405,11 @@ const Dashboard = () => {
               onExitProcess={handleExit}
               selectedExitPid={selectedExitPid}
               onSelectExitPid={setSelectedExitPid}
+              isAutoPlaying={isAutoPlaying}
+              onPlayPause={handlePlayPause}
+              speed={speed}
+              onSpeedChange={setSpeed}
+              hasRunningProcesses={runningCount > 0}
             />
           </div>
 
