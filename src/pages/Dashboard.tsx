@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { ProcessNode } from '@/types/process';
 import { Navigation } from '@/components/Navigation';
 import { ControlPanel } from '@/components/ControlPanel';
 import { TreeVisualization } from '@/components/TreeVisualization';
@@ -147,37 +148,106 @@ const Dashboard = () => {
     }
   }, [selectedNode, executionMode, startScopedExecution]);
 
-  // Auto-play effect: automatically fork/wait/exit through lifecycle
+  // Helper: Get all processes that can act (running or waiting with running children)
+  const getActiveProcesses = useCallback((node: ProcessNode | null): ProcessNode[] => {
+    if (!node) return [];
+    const result: ProcessNode[] = [];
+    if (node.state === 'running' || node.state === 'orphan' || node.state === 'waiting') {
+      result.push(node);
+    }
+    for (const child of node.children) {
+      result.push(...getActiveProcesses(child));
+    }
+    return result;
+  }, []);
+
+  // Helper: Check if a process is a leaf (no running/orphan children)
+  const isLeafProcess = useCallback((node: ProcessNode): boolean => {
+    return !node.children.some(c => c.state === 'running' || c.state === 'orphan');
+  }, []);
+
+  // Helper: Get leaf processes (bottom of tree, ready to exit)
+  const getLeafProcesses = useCallback((node: ProcessNode | null): ProcessNode[] => {
+    if (!node) return [];
+    const result: ProcessNode[] = [];
+    
+    if ((node.state === 'running' || node.state === 'orphan') && isLeafProcess(node)) {
+      result.push(node);
+    }
+    
+    for (const child of node.children) {
+      result.push(...getLeafProcesses(child));
+    }
+    return result;
+  }, [isLeafProcess]);
+
+  // Helper: Get non-leaf running processes that have running children but aren't waiting yet
+  const getParentsNotWaiting = useCallback((node: ProcessNode | null): ProcessNode[] => {
+    if (!node) return [];
+    const result: ProcessNode[] = [];
+    
+    if (node.state === 'running' && !isLeafProcess(node)) {
+      // Parent with running children that isn't waiting yet
+      result.push(node);
+    }
+    
+    for (const child of node.children) {
+      result.push(...getParentsNotWaiting(child));
+    }
+    return result;
+  }, [isLeafProcess]);
+
+  // Auto-play effect: UNIX-correct bottom-up execution
+  // 1. Parents enter WAITING state first (call wait())
+  // 2. Leaf children exit (bottom-up)
+  // 3. Parents are resumed after reaping children
   useEffect(() => {
     if (!isAutoPlaying || !root) return;
 
-    const runningProcesses = getAllRunningProcesses(root);
+    const allActive = getActiveProcesses(root);
+    const runningOrOrphan = allActive.filter(p => p.state === 'running' || p.state === 'orphan');
     
-    // Stop if no more running processes
-    if (runningProcesses.length === 0) {
+    // Stop if no more running/orphan processes
+    if (runningOrOrphan.length === 0) {
       setIsAutoPlaying(false);
-      setLastAction('Auto-execution complete - no more running processes');
-      setOsExplanation('All processes have terminated. The simulation has reached a stable state.');
+      setLastAction('Auto-execution complete - all processes terminated');
+      setOsExplanation('All processes have terminated. The simulation has reached a stable state with correct UNIX lifecycle completion.');
       return;
     }
 
     const intervalId = setInterval(() => {
-      const currentRunning = getAllRunningProcesses(root);
-      if (currentRunning.length === 0) {
-        setIsAutoPlaying(false);
+      // Step 1: Find parents that have running children but haven't called wait() yet
+      const parentsNotWaiting = getParentsNotWaiting(root);
+      
+      if (parentsNotWaiting.length > 0) {
+        // Make the deepest parent call wait() first (bottom-up parent waiting)
+        const deepestParent = parentsNotWaiting.reduce((a, b) => a.depth > b.depth ? a : b);
+        waitProcess(deepestParent.pid);
+        setLastAction(`Auto: PID ${deepestParent.pid} called wait() - blocking for child`);
+        setOsExplanation(`Parent process ${deepestParent.pid} is now WAITING for its children to exit. This is required before children can be reaped cleanly.`);
+        setDsaExplanation(`Bottom-up traversal: parent nodes must wait before leaf nodes can be processed and removed.`);
         return;
       }
-
-      // Pick a random running process to exit (simulates scheduler non-determinism)
-      const randomIndex = Math.floor(Math.random() * currentRunning.length);
-      const processToExit = currentRunning[randomIndex];
       
-      exitProcess(processToExit.pid);
-      setLastAction(`Auto: exit() called by PID ${processToExit.pid}`);
+      // Step 2: All eligible parents are waiting - now exit leaf processes
+      const leaves = getLeafProcesses(root);
+      
+      if (leaves.length > 0) {
+        // Exit the deepest leaf first (true bottom-up)
+        const deepestLeaf = leaves.reduce((a, b) => a.depth > b.depth ? a : b);
+        exitProcess(deepestLeaf.pid);
+        setLastAction(`Auto: PID ${deepestLeaf.pid} called exit()`);
+        setOsExplanation(`Leaf process ${deepestLeaf.pid} exited. Since parent was WAITING, child is reaped immediately - no zombie created.`);
+        setDsaExplanation(`Postorder traversal: children complete before parents. Leaf node removed from tree.`);
+        return;
+      }
+      
+      // No more work to do
+      setIsAutoPlaying(false);
     }, speed);
 
     return () => clearInterval(intervalId);
-  }, [isAutoPlaying, root, speed, getAllRunningProcesses, exitProcess]);
+  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess]);
 
   const handlePlayPause = useCallback(() => {
     if (isAutoPlaying) {
