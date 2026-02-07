@@ -92,7 +92,7 @@ export const ControlPanel = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                onClick={onKill}
+                onClick={() => onKill()}
                 disabled={!canKill}
                 className="w-full gap-2 bg-process-zombie/20 hover:bg-process-zombie/30 text-process-zombie border border-process-zombie/50 disabled:opacity-50"
                 variant="outline"
