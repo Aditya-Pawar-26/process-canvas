@@ -454,7 +454,7 @@ const GanttChart = () => {
               value={[speed]}
               onValueChange={([v]) => setSpeed(v)}
               min={200}
-              max={2000}
+              max={5000}
               step={100}
               className="w-32"
             />

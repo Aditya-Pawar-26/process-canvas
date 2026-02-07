@@ -12,6 +12,7 @@ import { useProcessTreeContext } from '@/contexts/ProcessTreeContext';
 import { TreeVisualization } from '@/components/TreeVisualization';
 import { ConsoleLog } from '@/components/ConsoleLog';
 import { Play, Pause, RotateCcw, ChevronLeft, ChevronRight, BookOpen } from 'lucide-react';
+import { Slider } from '@/components/ui/slider';
 
 const GuidedMode = () => {
   const location = useLocation();
@@ -21,6 +22,7 @@ const GuidedMode = () => {
   );
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [stepSpeed, setStepSpeed] = useState(1500);
   
   // Get voice mode from context
   const { voiceModeEnabled, speakEvent, speakRaw } = useProcessTreeContext();
@@ -115,8 +117,8 @@ const GuidedMode = () => {
     }
   }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess, voiceModeEnabled, speakEvent, speakRaw]);
 
-  // Voice mode delay: 2.5 seconds when enabled for guided explanations, otherwise 1.5s
-  const stepDelay = voiceModeEnabled ? 2500 : 1500;
+  // Voice mode delay: add 1 second when enabled for guided explanations
+  const stepDelay = voiceModeEnabled ? Math.max(stepSpeed, 2500) : stepSpeed;
 
   useEffect(() => {
     if (isPlaying && currentStepIndex < selectedScenario.steps.length - 1) {
@@ -197,6 +199,26 @@ const GuidedMode = () => {
                       <p className="text-xs text-muted-foreground">{step.description}</p>
                     </div>
                   ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Speed Slider */}
+            <Card className="bg-card border-border">
+              <CardContent className="py-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Speed:</span>
+                  <Slider
+                    value={[stepSpeed]}
+                    onValueChange={([v]) => setStepSpeed(v)}
+                    min={500}
+                    max={5000}
+                    step={100}
+                    className="flex-1"
+                  />
+                  <span className="text-xs text-muted-foreground font-mono w-16">
+                    {stepSpeed}ms
+                  </span>
                 </div>
               </CardContent>
             </Card>

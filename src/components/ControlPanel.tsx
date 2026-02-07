@@ -145,14 +145,14 @@ export const ControlPanel = ({
         <div className="space-y-2">
           <label className="text-xs text-muted-foreground flex justify-between">
             <span>Animation Speed</span>
-            <span className="font-mono">{speed}x</span>
+            <span className="font-mono">{speed}ms</span>
           </label>
           <Slider
             value={[speed]}
             onValueChange={(v) => setSpeed(v[0])}
-            min={0.5}
-            max={3}
-            step={0.5}
+            min={200}
+            max={5000}
+            step={100}
             className="w-full"
           />
         </div>
