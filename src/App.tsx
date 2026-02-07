@@ -11,6 +11,7 @@ import Theory from "./pages/Theory";
 import Help from "./pages/Help";
 import CodeEditor from "./pages/CodeEditor";
 import GuidedMode from "./pages/GuidedMode";
+import Quiz from "./pages/Quiz";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ const App = () => (
           <Route path="/code-editor" element={<CodeEditor />} />
           <Route path="/guided" element={<GuidedMode />} />
           <Route path="/theory" element={<Theory />} />
+          <Route path="/quiz" element={<Quiz />} />
           <Route path="/help" element={<Help />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

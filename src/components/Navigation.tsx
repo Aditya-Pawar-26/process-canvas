@@ -11,7 +11,8 @@ import {
   HelpCircle,
   Menu,
   X,
-  Compass
+  Compass,
+  ClipboardCheck
 } from 'lucide-react';
 import { useState, forwardRef } from 'react';
 
@@ -23,6 +24,7 @@ const navItems = [
   { path: '/code-editor', label: 'Code Editor', icon: Code },
   { path: '/dsa-tree', label: 'DSA Tree', icon: TreeDeciduous },
   { path: '/theory', label: 'Theory', icon: BookOpen },
+  { path: '/quiz', label: 'Quiz', icon: ClipboardCheck },
   { path: '/help', label: 'Help', icon: HelpCircle },
 ];
 
@@ -44,7 +46,7 @@ export const Navigation = forwardRef<HTMLElement>((_, ref) => {
 
         {/* Desktop Navigation */}
         <div className="hidden md:flex items-center space-x-1 flex-1">
-          {navItems.slice(1, 7).map((item) => (
+          {navItems.slice(1, 8).map((item) => (
             <Link key={item.path} to={item.path}>
               <Button
                 variant="ghost"
