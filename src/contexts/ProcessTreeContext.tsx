@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 import { ProcessNode, LogEntry } from '@/types/process';
 import { useProcessTree } from '@/hooks/useProcessTree';
+import { useVoiceNarrator, VoiceEventType } from '@/hooks/useVoiceNarrator';
 
 // Types for execution history (for Gantt Chart)
 export interface ExecutionEvent {
@@ -41,6 +42,13 @@ interface ProcessTreeContextType {
   executionHistory: ExecutionEvent[];
   cpuOwnerHistory: CpuOwnership[];
   currentCpuOwner: number | null;
+  
+  // Voice mode state
+  voiceModeEnabled: boolean;
+  setVoiceModeEnabled: (enabled: boolean) => void;
+  speakEvent: (type: VoiceEventType, params: { pid?: number; parentPid?: number; childPid?: number }) => void;
+  speakRaw: (message: string) => void;
+  stopSpeaking: () => void;
   
   // Actions
   setSelectedNode: (node: ProcessNode | null) => void;
@@ -95,6 +103,17 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
   const [executionHistory, setExecutionHistory] = useState<ExecutionEvent[]>([]);
   const [cpuOwnerHistory, setCpuOwnerHistory] = useState<CpuOwnership[]>([]);
   const [currentCpuOwner, setCurrentCpuOwner] = useState<number | null>(null);
+  
+  // Voice mode state
+  const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
+  
+  // Voice narrator hook
+  const { speak, speakRaw, stop: stopSpeaking, clearLastMessage } = useVoiceNarrator({
+    enabled: voiceModeEnabled,
+    rate: 1.0,
+    pitch: 1.0,
+    volume: 1.0,
+  });
   
   // Record an execution event for the Gantt chart
   const recordExecution = useCallback((
@@ -167,11 +186,13 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
     return ownership?.pid ?? null;
   }, [cpuOwnerHistory]);
   
-  // Wrap reset to also clear execution history
+  // Wrap reset to also clear execution history and voice
   const wrappedResetTree = useCallback(() => {
     processTree.resetTree();
     resetExecutionHistory();
-  }, [processTree, resetExecutionHistory]);
+    stopSpeaking();
+    clearLastMessage();
+  }, [processTree, resetExecutionHistory, stopSpeaking, clearLastMessage]);
   
   const value = useMemo<ProcessTreeContextType>(() => ({
     // From useProcessTree
@@ -195,6 +216,13 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
     executionHistory,
     cpuOwnerHistory,
     currentCpuOwner,
+    
+    // Voice mode
+    voiceModeEnabled,
+    setVoiceModeEnabled,
+    speakEvent: speak,
+    speakRaw,
+    stopSpeaking,
     
     // Actions from useProcessTree
     setSelectedNode: processTree.setSelectedNode,
@@ -231,6 +259,10 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
     executionHistory,
     cpuOwnerHistory,
     currentCpuOwner,
+    voiceModeEnabled,
+    speak,
+    speakRaw,
+    stopSpeaking,
     wrappedResetTree,
     recordExecution,
     setCpuOwner,

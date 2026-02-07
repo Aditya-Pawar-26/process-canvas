@@ -142,6 +142,8 @@ const GanttChart = () => {
     currentCpuOwner,
     isAutoPlaying,
     speed,
+    voiceModeEnabled,
+    speakEvent,
     setSelectedNode,
     forkAllProcesses,
     waitProcess,
@@ -157,6 +159,9 @@ const GanttChart = () => {
     setCpuOwner,
     getCpuOwnerAtTime,
   } = useProcessTreeContext();
+  
+  // Track previous CPU owner for voice narration
+  const [prevCpuOwner, setPrevCpuOwner] = useState<number | null>(null);
   
   // Get all processes for the Y-axis
   const allProcesses = useMemo(() => {
@@ -272,6 +277,14 @@ const GanttChart = () => {
 
     return () => clearInterval(intervalId);
   }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying, getAllRunningProcesses, setCpuOwner]);
+
+  // Voice narration when CPU owner changes (only for Gantt page)
+  useEffect(() => {
+    if (voiceModeEnabled && currentCpuOwner !== null && currentCpuOwner !== prevCpuOwner) {
+      speakEvent('cpu_scheduled', { pid: currentCpuOwner });
+      setPrevCpuOwner(currentCpuOwner);
+    }
+  }, [currentCpuOwner, prevCpuOwner, voiceModeEnabled, speakEvent]);
 
   // Execute single step
   const executeNextStep = useCallback(() => {

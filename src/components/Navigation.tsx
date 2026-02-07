@@ -16,6 +16,7 @@ import {
   Clock
 } from 'lucide-react';
 import { useState, forwardRef } from 'react';
+import { VoiceModeToggle } from './VoiceModeToggle';
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
@@ -66,6 +67,7 @@ export const Navigation = forwardRef<HTMLElement>((_, ref) => {
         </div>
 
         <div className="hidden md:flex items-center space-x-2 ml-auto">
+          <VoiceModeToggle />
           <Link to="/help">
             <Button variant="ghost" size="sm" className={cn(
               "gap-2 text-muted-foreground hover:text-foreground",
