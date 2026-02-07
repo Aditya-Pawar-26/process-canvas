@@ -249,6 +249,9 @@ const Dashboard = () => {
     return result;
   }, [isLeafProcess]);
 
+  // Voice mode delay: 1.5 seconds when enabled, otherwise use speed slider
+  const effectiveSpeed = voiceModeEnabled ? Math.max(speed, 1500) : speed;
+
   // Auto-play effect: UNIX-correct bottom-up execution
   // 1. Parents enter WAITING state first (call wait())
   // 2. Leaf children exit (bottom-up)
@@ -281,6 +284,15 @@ const Dashboard = () => {
         setLastAction(`Auto: PID ${deepestParent.pid} called wait() - blocking for child`);
         setOsExplanation(`Parent process ${deepestParent.pid} is now WAITING for its children to exit. This is required before children can be reaped cleanly.`);
         setDsaExplanation(`Bottom-up traversal: parent nodes must wait before leaf nodes can be processed and removed.`);
+        
+        // Voice narration for parent waiting
+        if (voiceModeEnabled) {
+          const runningChildren = deepestParent.children.filter(c => c.state === 'running' || c.state === 'orphan');
+          speakEvent('parent_waiting', { 
+            pid: deepestParent.pid, 
+            childPid: runningChildren.length > 0 ? runningChildren[0].pid : undefined 
+          });
+        }
         return;
       }
       
@@ -290,20 +302,32 @@ const Dashboard = () => {
       if (leaves.length > 0) {
         // Exit the deepest leaf first (true bottom-up)
         const deepestLeaf = leaves.reduce((a, b) => a.depth > b.depth ? a : b);
+        const parentNode = getAllRunningProcesses(root).find(p => p.pid === deepestLeaf.ppid);
+        const parentWasWaiting = parentNode?.state === 'waiting';
+        
         exitProcess(deepestLeaf.pid);
         recordExecution(deepestLeaf.pid, 'exit', 'terminated');
         setLastAction(`Auto: PID ${deepestLeaf.pid} called exit()`);
         setOsExplanation(`Leaf process ${deepestLeaf.pid} exited. Since parent was WAITING, child is reaped immediately - no zombie created.`);
         setDsaExplanation(`Postorder traversal: children complete before parents. Leaf node removed from tree.`);
+        
+        // Voice narration for exit/reap
+        if (voiceModeEnabled) {
+          if (parentWasWaiting) {
+            speakEvent('process_reaped', { pid: deepestLeaf.pid, parentPid: deepestLeaf.ppid });
+          } else {
+            speakEvent('process_exit', { pid: deepestLeaf.pid });
+          }
+        }
         return;
       }
       
       // No more work to do
       setIsAutoPlaying(false);
-    }, speed);
+    }, effectiveSpeed);
 
     return () => clearInterval(intervalId);
-  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying]);
+  }, [isAutoPlaying, root, effectiveSpeed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying, voiceModeEnabled, speakEvent, getAllRunningProcesses]);
 
   const handlePlayPause = useCallback(() => {
     if (isAutoPlaying) {

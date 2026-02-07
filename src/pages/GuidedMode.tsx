@@ -115,14 +115,17 @@ const GuidedMode = () => {
     }
   }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess, voiceModeEnabled, speakEvent, speakRaw]);
 
+  // Voice mode delay: 2.5 seconds when enabled for guided explanations, otherwise 1.5s
+  const stepDelay = voiceModeEnabled ? 2500 : 1500;
+
   useEffect(() => {
     if (isPlaying && currentStepIndex < selectedScenario.steps.length - 1) {
-      const timer = setTimeout(executeStep, 1500);
+      const timer = setTimeout(executeStep, stepDelay);
       return () => clearTimeout(timer);
     } else if (currentStepIndex >= selectedScenario.steps.length - 1) {
       setIsPlaying(false);
     }
-  }, [isPlaying, currentStepIndex, selectedScenario.steps.length, executeStep]);
+  }, [isPlaying, currentStepIndex, selectedScenario.steps.length, executeStep, stepDelay]);
 
   const currentStep = currentStepIndex >= 0 ? selectedScenario.steps[currentStepIndex] : null;
 
