@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { Clock, CheckCircle2, Circle, Target } from 'lucide-react';
+import { Clock, CheckCircle2, Circle, Target, Play } from 'lucide-react';
 
 interface ExecutionTimelineProps {
   executionPath: number[];
@@ -9,6 +9,7 @@ interface ExecutionTimelineProps {
   logicalTime: number;
   executionComplete: boolean;
   boundaryPid: number | null;
+  isAutoPlaying?: boolean;
 }
 
 export const ExecutionTimeline = ({
@@ -18,6 +19,7 @@ export const ExecutionTimeline = ({
   logicalTime,
   executionComplete,
   boundaryPid,
+  isAutoPlaying = false,
 }: ExecutionTimelineProps) => {
   if (executionPath.length === 0) {
     return null;
@@ -28,6 +30,12 @@ export const ExecutionTimeline = ({
       <div className="flex items-center gap-2 mb-3">
         <Clock className="w-4 h-4 text-muted-foreground" />
         <span className="text-sm font-medium text-foreground">Execution Timeline</span>
+        {isAutoPlaying && (
+          <Badge variant="secondary" className="text-xs gap-1">
+            <Play className="w-3 h-3" />
+            Auto
+          </Badge>
+        )}
         <Badge variant="outline" className="ml-auto font-mono text-xs">
           t = {logicalTime} / {executionPath.length}
         </Badge>

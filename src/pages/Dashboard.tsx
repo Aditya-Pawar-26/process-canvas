@@ -9,7 +9,7 @@ import { useProcessTree } from '@/hooks/useProcessTree';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Footprints, AlertTriangle, Play, Target, Maximize } from 'lucide-react';
+import { RotateCcw, Footprints, AlertTriangle, Play, Pause, Target, Maximize } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
 
 const Dashboard = () => {
   const {
@@ -44,10 +45,13 @@ const Dashboard = () => {
     startScopedExecution,
     executeNextScopedStep,
     resetScopedExecution,
+    isAutoPlaying,
+    startAutoPlay,
+    pauseAutoPlay,
   } = useProcessTree();
 
   const [forkDepth, setForkDepth] = useState(3);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(1000); // ms between auto-steps
   const [stepMode, setStepMode] = useState(false);
   const [lastAction, setLastAction] = useState<string>();
   const [osExplanation, setOsExplanation] = useState<string>();
@@ -167,6 +171,20 @@ const Dashboard = () => {
   const canKill = selectedNode?.state === 'running';
   const canStartScoped = executionMode === 'until-selected' && selectedNode && !executionBoundaryPid;
 
+  // Auto-play effect: advance execution at interval
+  useEffect(() => {
+    if (!isAutoPlaying || executionComplete) return;
+
+    const intervalId = setInterval(() => {
+      const result = executeNextScopedStep();
+      if (!result) {
+        pauseAutoPlay();
+      }
+    }, speed);
+
+    return () => clearInterval(intervalId);
+  }, [isAutoPlaying, executionComplete, speed, executeNextScopedStep, pauseAutoPlay]);
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Navigation />
@@ -271,21 +289,56 @@ const Dashboard = () => {
                       Path: {executionPath.join(' → ')}
                     </Badge>
                     {!executionComplete && (
-                      <Button 
-                        size="sm" 
-                        variant="default"
-                        onClick={handleScopedStep}
-                        className="gap-1"
-                      >
-                        <Play className="w-4 h-4" />
-                        Execute Next (N)
-                      </Button>
+                      <>
+                        {isAutoPlaying ? (
+                          <Button 
+                            size="sm" 
+                            variant="secondary"
+                            onClick={pauseAutoPlay}
+                            className="gap-1"
+                          >
+                            <Pause className="w-4 h-4" />
+                            Pause
+                          </Button>
+                        ) : (
+                          <Button 
+                            size="sm" 
+                            variant="default"
+                            onClick={startAutoPlay}
+                            className="gap-1"
+                          >
+                            <Play className="w-4 h-4" />
+                            Play
+                          </Button>
+                        )}
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={handleScopedStep}
+                          disabled={isAutoPlaying}
+                          className="gap-1"
+                        >
+                          Step (N)
+                        </Button>
+                      </>
                     )}
                     {executionComplete && (
                       <Badge variant="default" className="bg-process-running text-process-running-foreground">
                         ✓ Execution Complete
                       </Badge>
                     )}
+                    <div className="flex items-center gap-2 ml-2 border-l border-border pl-2">
+                      <span className="text-xs text-muted-foreground">Speed:</span>
+                      <Slider
+                        value={[speed]}
+                        onValueChange={(v) => setSpeed(v[0])}
+                        min={200}
+                        max={2000}
+                        step={100}
+                        className="w-20"
+                      />
+                      <span className="text-xs font-mono text-muted-foreground w-12">{speed}ms</span>
+                    </div>
                     <Button 
                       size="sm" 
                       variant="outline"
@@ -347,6 +400,7 @@ const Dashboard = () => {
                 logicalTime={logicalTime}
                 executionComplete={executionComplete}
                 boundaryPid={executionBoundaryPid}
+                isAutoPlaying={isAutoPlaying}
               />
             )}
             
