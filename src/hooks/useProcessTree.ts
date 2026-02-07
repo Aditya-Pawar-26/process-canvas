@@ -24,6 +24,8 @@ export const useProcessTree = () => {
   const [logicalTime, setLogicalTime] = useState<number>(0);
   // Store the computed execution path for consistency
   const [executionPath, setExecutionPath] = useState<number[]>([]);
+  // Auto-execution state
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
 
   const addLog = useCallback((type: LogEntry['type'], message: string, pid?: number) => {
     const entry: LogEntry = {
@@ -594,7 +596,21 @@ export const useProcessTree = () => {
     setCurrentExecutingPid(null);
     setLogicalTime(0);
     setExecutionPath([]);
+    setIsAutoPlaying(false);
   }, []);
+
+  // Start auto-play execution
+  const startAutoPlay = useCallback(() => {
+    if (executionComplete || executionPath.length === 0) return;
+    setIsAutoPlaying(true);
+    addLog('info', `[AUTO] Started automatic execution`, undefined);
+  }, [executionComplete, executionPath.length, addLog]);
+
+  // Pause auto-play execution
+  const pauseAutoPlay = useCallback(() => {
+    setIsAutoPlaying(false);
+    addLog('info', `[AUTO] Paused at t=${logicalTime}`, undefined);
+  }, [logicalTime, addLog]);
 
   const getAllNodes = useCallback((node: ProcessNode | null): ProcessNode[] => {
     if (!node) return [];
@@ -614,6 +630,7 @@ export const useProcessTree = () => {
     currentExecutingPid,
     logicalTime,
     executionPath,
+    isAutoPlaying,
     setSelectedNode,
     setExecutionMode,
     createRootProcess,
@@ -631,5 +648,7 @@ export const useProcessTree = () => {
     startScopedExecution,
     executeNextScopedStep,
     resetScopedExecution,
+    startAutoPlay,
+    pauseAutoPlay,
   };
 };
