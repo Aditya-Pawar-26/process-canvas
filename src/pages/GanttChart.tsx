@@ -229,6 +229,9 @@ const GanttChart = () => {
     return result;
   }, []);
 
+  // Voice mode delay: 1.5 seconds when enabled, otherwise use speed slider
+  const effectiveSpeed = voiceModeEnabled ? Math.max(speed, 1500) : speed;
+
   // Auto-play effect (UNIX-correct bottom-up)
   useEffect(() => {
     if (!isAutoPlaying || !root) return;
@@ -273,10 +276,10 @@ const GanttChart = () => {
       }
       
       setIsAutoPlaying(false);
-    }, speed);
+    }, effectiveSpeed);
 
     return () => clearInterval(intervalId);
-  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying, getAllRunningProcesses, setCpuOwner]);
+  }, [isAutoPlaying, root, effectiveSpeed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying, getAllRunningProcesses, setCpuOwner]);
 
   // Voice narration when CPU owner changes (only for Gantt page)
   useEffect(() => {
