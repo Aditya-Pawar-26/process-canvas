@@ -6,11 +6,12 @@ import { TreeVisualization } from '@/components/TreeVisualization';
 import { InfoPanel } from '@/components/InfoPanel';
 import { ConsoleLog } from '@/components/ConsoleLog';
 import { ExecutionTimeline } from '@/components/ExecutionTimeline';
-import { useProcessTree } from '@/hooks/useProcessTree';
+import { useProcessTreeContext } from '@/contexts/ProcessTreeContext';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { RotateCcw, Footprints, AlertTriangle, Play, Target, Maximize } from 'lucide-react';
+import { RotateCcw, Footprints, AlertTriangle, Play, Target, Maximize, Clock, ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import {
   Select,
   SelectContent,
@@ -32,6 +33,9 @@ const Dashboard = () => {
     currentExecutingPid,
     logicalTime,
     executionPath,
+    isAutoPlaying,
+    speed,
+    globalLogicalTime,
     setSelectedNode,
     setExecutionMode,
     createRootProcess,
@@ -45,11 +49,13 @@ const Dashboard = () => {
     startScopedExecution,
     executeNextScopedStep,
     resetScopedExecution,
-  } = useProcessTree();
+    setIsAutoPlaying,
+    setSpeed,
+    recordExecution,
+    incrementGlobalTime,
+  } = useProcessTreeContext();
 
   const [forkDepth, setForkDepth] = useState(3);
-  const [speed, setSpeed] = useState(1000); // ms between auto-steps
-  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [stepMode, setStepMode] = useState(false);
   const [lastAction, setLastAction] = useState<string>();
   const [osExplanation, setOsExplanation] = useState<string>();
@@ -216,6 +222,8 @@ const Dashboard = () => {
     }
 
     const intervalId = setInterval(() => {
+      incrementGlobalTime();
+      
       // Step 1: Find parents that have running children but haven't called wait() yet
       const parentsNotWaiting = getParentsNotWaiting(root);
       
@@ -223,6 +231,7 @@ const Dashboard = () => {
         // Make the deepest parent call wait() first (bottom-up parent waiting)
         const deepestParent = parentsNotWaiting.reduce((a, b) => a.depth > b.depth ? a : b);
         waitProcess(deepestParent.pid);
+        recordExecution(deepestParent.pid, 'wait', 'waiting');
         setLastAction(`Auto: PID ${deepestParent.pid} called wait() - blocking for child`);
         setOsExplanation(`Parent process ${deepestParent.pid} is now WAITING for its children to exit. This is required before children can be reaped cleanly.`);
         setDsaExplanation(`Bottom-up traversal: parent nodes must wait before leaf nodes can be processed and removed.`);
@@ -236,6 +245,7 @@ const Dashboard = () => {
         // Exit the deepest leaf first (true bottom-up)
         const deepestLeaf = leaves.reduce((a, b) => a.depth > b.depth ? a : b);
         exitProcess(deepestLeaf.pid);
+        recordExecution(deepestLeaf.pid, 'exit', 'terminated');
         setLastAction(`Auto: PID ${deepestLeaf.pid} called exit()`);
         setOsExplanation(`Leaf process ${deepestLeaf.pid} exited. Since parent was WAITING, child is reaped immediately - no zombie created.`);
         setDsaExplanation(`Postorder traversal: children complete before parents. Leaf node removed from tree.`);
@@ -247,7 +257,7 @@ const Dashboard = () => {
     }, speed);
 
     return () => clearInterval(intervalId);
-  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess]);
+  }, [isAutoPlaying, root, speed, getActiveProcesses, getLeafProcesses, getParentsNotWaiting, waitProcess, exitProcess, incrementGlobalTime, recordExecution, setIsAutoPlaying]);
 
   const handlePlayPause = useCallback(() => {
     if (isAutoPlaying) {
@@ -259,7 +269,7 @@ const Dashboard = () => {
       setLastAction('Auto-execution started');
       setOsExplanation('Processes will exit automatically according to the scheduler. Parent-child dependencies will be enforced with UNIX semantics (zombies, orphans, reaping).');
     }
-  }, [isAutoPlaying]);
+  }, [isAutoPlaying, setIsAutoPlaying]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -311,10 +321,20 @@ const Dashboard = () => {
                 <Badge variant="secondary" className="font-mono">
                   Expected: 2^{forkCount} = {Math.pow(2, forkCount)}
                 </Badge>
+                <Badge variant="outline" className="font-mono">
+                  t = {globalLogicalTime}
+                </Badge>
               </div>
             )}
           </div>
           <div className="flex items-center gap-2">
+            <Link to="/gantt">
+              <Button variant="outline" size="sm" className="gap-2">
+                <Clock className="w-4 h-4" />
+                Gantt Chart
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </Link>
             <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted/50 px-2 py-1 rounded">
               <AlertTriangle className="w-3 h-3 text-process-waiting" />
               Execution order is scheduler-dependent

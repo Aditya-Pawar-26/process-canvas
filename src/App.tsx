@@ -3,6 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { ProcessTreeProvider } from "./contexts/ProcessTreeContext";
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import Scenarios from "./pages/Scenarios";
@@ -12,6 +13,7 @@ import Help from "./pages/Help";
 import CodeEditor from "./pages/CodeEditor";
 import GuidedMode from "./pages/GuidedMode";
 import Quiz from "./pages/Quiz";
+import GanttChart from "./pages/GanttChart";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -19,22 +21,25 @@ const queryClient = new QueryClient();
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/scenarios" element={<Scenarios />} />
-          <Route path="/dsa-tree" element={<DSATree />} />
-          <Route path="/code-editor" element={<CodeEditor />} />
-          <Route path="/guided" element={<GuidedMode />} />
-          <Route path="/theory" element={<Theory />} />
-          <Route path="/quiz" element={<Quiz />} />
-          <Route path="/help" element={<Help />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
+      <ProcessTreeProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Landing />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/scenarios" element={<Scenarios />} />
+            <Route path="/dsa-tree" element={<DSATree />} />
+            <Route path="/code-editor" element={<CodeEditor />} />
+            <Route path="/guided" element={<GuidedMode />} />
+            <Route path="/theory" element={<Theory />} />
+            <Route path="/quiz" element={<Quiz />} />
+            <Route path="/gantt" element={<GanttChart />} />
+            <Route path="/help" element={<Help />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </ProcessTreeProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );
