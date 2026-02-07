@@ -27,6 +27,9 @@ const Dashboard = () => {
     executionBoundaryPid,
     executedPids,
     executionComplete,
+    currentExecutingPid,
+    logicalTime,
+    executionPath,
     setSelectedNode,
     setExecutionMode,
     createRootProcess,
@@ -56,8 +59,9 @@ const Dashboard = () => {
     if (executionMode === 'full' || !executionBoundaryPid) {
       return new Set<number>();
     }
-    return new Set(getAncestorChain(executionBoundaryPid));
-  }, [executionMode, executionBoundaryPid, getAncestorChain]);
+    // Use the stored execution path for consistency
+    return new Set(executionPath.length > 0 ? executionPath : getAncestorChain(executionBoundaryPid));
+  }, [executionMode, executionBoundaryPid, executionPath, getAncestorChain]);
 
   // Is scoped execution active?
   const isScopedExecution = executionMode === 'until-selected' && executionBoundaryPid !== null;
@@ -255,7 +259,10 @@ const Dashboard = () => {
                       Boundary: PID {executionBoundaryPid}
                     </Badge>
                     <Badge variant="secondary" className="font-mono">
-                      Path: {getAncestorChain(executionBoundaryPid).join(' → ')}
+                      t={logicalTime} / {executionPath.length}
+                    </Badge>
+                    <Badge variant="outline" className="font-mono text-xs">
+                      Path: {executionPath.join(' → ')}
                     </Badge>
                     {!executionComplete && (
                       <Button 
@@ -320,6 +327,7 @@ const Dashboard = () => {
                 onExit={(pid) => exitProcess(pid)}
                 executionPathPids={executionPathPids}
                 executedPids={executedPids}
+                currentExecutingPid={currentExecutingPid}
                 isScopedExecution={isScopedExecution}
               />
             </div>

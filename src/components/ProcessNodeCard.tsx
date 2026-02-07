@@ -20,6 +20,8 @@ export interface ProcessNodeCardProps {
   isHighlighted?: boolean;
   isDimmed?: boolean;
   isExecuted?: boolean;
+  isCurrentlyExecuting?: boolean;
+  isPending?: boolean;
   onSelect: (node: ProcessNode) => void;
   onFork: (pid: number) => void;
   onWait: (pid: number) => void;
@@ -32,6 +34,8 @@ export const ProcessNodeCard = ({
   isHighlighted,
   isDimmed,
   isExecuted,
+  isCurrentlyExecuting,
+  isPending,
   onSelect,
   onFork,
   onWait,
@@ -100,7 +104,12 @@ export const ProcessNodeCard = ({
                   stateColors[node.state],
                   isSelected && 'ring-2 ring-primary ring-offset-2 ring-offset-background',
                   isHighlighted && 'animate-pulse-glow',
-                  isExecuted && 'ring-2 ring-process-running/50 ring-offset-1',
+                  // Currently executing: strong visual highlight with animation
+                  isCurrentlyExecuting && 'ring-4 ring-process-running ring-offset-2 ring-offset-background animate-pulse scale-105',
+                  // Already executed: subtle check mark style
+                  isExecuted && !isCurrentlyExecuting && 'ring-2 ring-process-running/40 ring-offset-1',
+                  // Pending: waiting to be executed (in path but not yet run)
+                  isPending && 'ring-1 ring-muted-foreground/30 ring-offset-1',
                   node.state === 'orphan' && 'border-dashed',
                   node.state === 'zombie' && 'border-dotted',
                   isDimmed && 'grayscale'

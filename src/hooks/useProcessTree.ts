@@ -19,6 +19,11 @@ export const useProcessTree = () => {
   const [executionBoundaryPid, setExecutionBoundaryPid] = useState<number | null>(null);
   const [executedPids, setExecutedPids] = useState<Set<number>>(new Set());
   const [executionComplete, setExecutionComplete] = useState(false);
+  // New: Track currently executing PID and logical time for step-wise execution
+  const [currentExecutingPid, setCurrentExecutingPid] = useState<number | null>(null);
+  const [logicalTime, setLogicalTime] = useState<number>(0);
+  // Store the computed execution path for consistency
+  const [executionPath, setExecutionPath] = useState<number[]>([]);
 
   const addLog = useCallback((type: LogEntry['type'], message: string, pid?: number) => {
     const entry: LogEntry = {
@@ -472,6 +477,9 @@ export const useProcessTree = () => {
     setExecutionBoundaryPid(null);
     setExecutedPids(new Set());
     setExecutionComplete(false);
+    setCurrentExecutingPid(null);
+    setLogicalTime(0);
+    setExecutionPath([]);
   }, []);
 
   // Get ancestor chain (path from root to target node)
@@ -510,53 +518,82 @@ export const useProcessTree = () => {
     return ancestorChain.includes(pid);
   }, [executionMode, executionBoundaryPid, getAncestorChain]);
 
-  // Start node-scoped execution
+  // Start node-scoped execution - computes and stores path, resets execution state
   const startScopedExecution = useCallback((targetPid: number) => {
+    const ancestorChain = getAncestorChain(targetPid);
+    
+    // Store the execution path for step-by-step traversal
+    setExecutionPath(ancestorChain);
     setExecutionBoundaryPid(targetPid);
     setExecutedPids(new Set());
     setExecutionComplete(false);
-    addLog('info', `Starting scoped execution until PID ${targetPid}`, targetPid);
+    setCurrentExecutingPid(null);
+    setLogicalTime(0);
     
-    const ancestorChain = getAncestorChain(targetPid);
+    addLog('info', `[SCOPED] Starting execution until PID ${targetPid}`, targetPid);
+    
     if (ancestorChain.length > 0) {
-      addLog('info', `Execution path: ${ancestorChain.join(' → ')}`, undefined);
+      addLog('info', `[PATH] Execution sequence: ${ancestorChain.join(' → ')}`, undefined);
+      addLog('info', `[TIME] t=0, waiting for first step (${ancestorChain.length} steps total)`, undefined);
     }
   }, [getAncestorChain, addLog]);
 
-  // Execute next step in scoped execution (hierarchical order)
+  // Execute next step in scoped execution - advances cursor by exactly one position
   const executeNextScopedStep = useCallback(() => {
     if (!root || !executionBoundaryPid || executionComplete) return null;
     
-    const ancestorChain = getAncestorChain(executionBoundaryPid);
+    // Use stored execution path for consistency
+    if (executionPath.length === 0) return null;
     
-    // Find next node to execute (first in chain that hasn't been executed)
-    for (const pid of ancestorChain) {
-      if (!executedPids.has(pid)) {
-        setExecutedPids(prev => new Set([...prev, pid]));
-        
-        const node = findNode(root, pid);
-        if (node) {
-          addLog('success', `Executed step for PID ${pid}`, pid);
-          
-          // Check if we've reached the boundary
-          if (pid === executionBoundaryPid) {
-            setExecutionComplete(true);
-            addLog('info', `Scoped execution complete at PID ${pid}`, pid);
-          }
-          
-          return node;
-        }
+    // Find the current execution index (how many have been executed)
+    const currentIndex = executedPids.size;
+    
+    // Check if we've completed all steps
+    if (currentIndex >= executionPath.length) {
+      setExecutionComplete(true);
+      setCurrentExecutingPid(null);
+      return null;
+    }
+    
+    // Get the next PID to execute
+    const nextPid = executionPath[currentIndex];
+    const nextTime = currentIndex + 1;
+    
+    // Update state: mark as currently executing, then add to executed set
+    setCurrentExecutingPid(nextPid);
+    setExecutedPids(prev => new Set([...prev, nextPid]));
+    setLogicalTime(nextTime);
+    
+    const node = findNode(root, nextPid);
+    if (node) {
+      addLog('success', `[t=${nextTime}] PID ${nextPid} executes`, nextPid);
+      
+      // Check if this was the final step (boundary reached)
+      if (nextPid === executionBoundaryPid) {
+        setExecutionComplete(true);
+        addLog('info', `[DONE] Scoped execution complete at t=${nextTime}`, nextPid);
+        // Clear current executing after completion
+        setTimeout(() => setCurrentExecutingPid(null), 300);
+      } else {
+        // Show what's next
+        const remaining = executionPath.length - nextTime;
+        addLog('info', `[NEXT] ${remaining} step(s) remaining`, undefined);
       }
+      
+      return node;
     }
     
     return null;
-  }, [root, executionBoundaryPid, executionComplete, executedPids, getAncestorChain, findNode, addLog]);
+  }, [root, executionBoundaryPid, executionComplete, executedPids, executionPath, findNode, addLog]);
 
   // Reset scoped execution state
   const resetScopedExecution = useCallback(() => {
     setExecutionBoundaryPid(null);
     setExecutedPids(new Set());
     setExecutionComplete(false);
+    setCurrentExecutingPid(null);
+    setLogicalTime(0);
+    setExecutionPath([]);
   }, []);
 
   const getAllNodes = useCallback((node: ProcessNode | null): ProcessNode[] => {
@@ -574,6 +611,9 @@ export const useProcessTree = () => {
     executionBoundaryPid,
     executedPids,
     executionComplete,
+    currentExecutingPid,
+    logicalTime,
+    executionPath,
     setSelectedNode,
     setExecutionMode,
     createRootProcess,
