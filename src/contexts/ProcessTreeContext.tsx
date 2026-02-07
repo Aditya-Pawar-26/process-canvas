@@ -13,6 +13,12 @@ export interface ExecutionEvent {
   parentPid?: number;
 }
 
+// CPU ownership tracking per time step
+export interface CpuOwnership {
+  time: number;
+  pid: number;
+}
+
 interface ProcessTreeContextType {
   // Process tree state
   root: ProcessNode | null;
@@ -33,6 +39,8 @@ interface ProcessTreeContextType {
   speed: number;
   globalLogicalTime: number;
   executionHistory: ExecutionEvent[];
+  cpuOwnerHistory: CpuOwnership[];
+  currentCpuOwner: number | null;
   
   // Actions
   setSelectedNode: (node: ProcessNode | null) => void;
@@ -59,6 +67,8 @@ interface ProcessTreeContextType {
   recordExecution: (pid: number, action: ExecutionEvent['action'], state: ExecutionEvent['state'], parentPid?: number) => void;
   incrementGlobalTime: () => void;
   resetExecutionHistory: () => void;
+  setCpuOwner: (pid: number | null) => void;
+  getCpuOwnerAtTime: (time: number) => number | null;
 }
 
 const ProcessTreeContext = createContext<ProcessTreeContextType | null>(null);
@@ -83,6 +93,8 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
   const [speed, setSpeed] = useState(1000);
   const [globalLogicalTime, setGlobalLogicalTime] = useState(0);
   const [executionHistory, setExecutionHistory] = useState<ExecutionEvent[]>([]);
+  const [cpuOwnerHistory, setCpuOwnerHistory] = useState<CpuOwnership[]>([]);
+  const [currentCpuOwner, setCurrentCpuOwner] = useState<number | null>(null);
   
   // Record an execution event for the Gantt chart
   const recordExecution = useCallback((
@@ -126,9 +138,34 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
   
   const resetExecutionHistory = useCallback(() => {
     setExecutionHistory([]);
+    setCpuOwnerHistory([]);
+    setCurrentCpuOwner(null);
     setGlobalLogicalTime(0);
     setIsAutoPlaying(false);
   }, []);
+  
+  // Set CPU owner for current time step
+  const setCpuOwner = useCallback((pid: number | null) => {
+    setCurrentCpuOwner(pid);
+    if (pid !== null) {
+      setCpuOwnerHistory(prev => {
+        // Update or add ownership for current time
+        const existingIndex = prev.findIndex(o => o.time === globalLogicalTime);
+        if (existingIndex >= 0) {
+          const updated = [...prev];
+          updated[existingIndex] = { time: globalLogicalTime, pid };
+          return updated;
+        }
+        return [...prev, { time: globalLogicalTime, pid }];
+      });
+    }
+  }, [globalLogicalTime]);
+  
+  // Get CPU owner at a specific time
+  const getCpuOwnerAtTime = useCallback((time: number): number | null => {
+    const ownership = cpuOwnerHistory.find(o => o.time === time);
+    return ownership?.pid ?? null;
+  }, [cpuOwnerHistory]);
   
   // Wrap reset to also clear execution history
   const wrappedResetTree = useCallback(() => {
@@ -156,6 +193,8 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
     speed,
     globalLogicalTime,
     executionHistory,
+    cpuOwnerHistory,
+    currentCpuOwner,
     
     // Actions from useProcessTree
     setSelectedNode: processTree.setSelectedNode,
@@ -182,14 +221,20 @@ export const ProcessTreeProvider = ({ children }: ProcessTreeProviderProps) => {
     recordExecution,
     incrementGlobalTime,
     resetExecutionHistory,
+    setCpuOwner,
+    getCpuOwnerAtTime,
   }), [
     processTree,
     isAutoPlaying,
     speed,
     globalLogicalTime,
     executionHistory,
+    cpuOwnerHistory,
+    currentCpuOwner,
     wrappedResetTree,
     recordExecution,
+    setCpuOwner,
+    getCpuOwnerAtTime,
     incrementGlobalTime,
     resetExecutionHistory,
   ]);
