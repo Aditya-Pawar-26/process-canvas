@@ -249,8 +249,15 @@ const Dashboard = () => {
     return result;
   }, [isLeafProcess]);
 
-  // Voice mode delay: 1.5 seconds when enabled, otherwise use speed slider
-  const effectiveSpeed = voiceModeEnabled ? Math.max(speed, 1500) : speed;
+  // Auto-set speed to 6 seconds when voice mode is enabled
+  useEffect(() => {
+    if (voiceModeEnabled) {
+      setSpeed(6000);
+    }
+  }, [voiceModeEnabled, setSpeed]);
+
+  // Voice mode delay: use speed slider value (already set to 6s when voice mode on)
+  const effectiveSpeed = speed;
 
   // Auto-play effect: UNIX-correct bottom-up execution
   // 1. Parents enter WAITING state first (call wait())

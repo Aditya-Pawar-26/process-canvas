@@ -151,7 +151,7 @@ export const ControlPanel = ({
             value={[speed]}
             onValueChange={(v) => setSpeed(v[0])}
             min={200}
-            max={5000}
+            max={6000}
             step={100}
             className="w-full"
           />

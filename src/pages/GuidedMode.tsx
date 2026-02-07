@@ -117,8 +117,15 @@ const GuidedMode = () => {
     }
   }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess, voiceModeEnabled, speakEvent, speakRaw]);
 
-  // Voice mode delay: add 1 second when enabled for guided explanations
-  const stepDelay = voiceModeEnabled ? Math.max(stepSpeed, 2500) : stepSpeed;
+  // Auto-set speed to 6 seconds when voice mode is enabled
+  useEffect(() => {
+    if (voiceModeEnabled) {
+      setStepSpeed(6000);
+    }
+  }, [voiceModeEnabled]);
+
+  // Use stepSpeed directly (already set to 6s when voice mode on)
+  const stepDelay = stepSpeed;
 
   useEffect(() => {
     if (isPlaying && currentStepIndex < selectedScenario.steps.length - 1) {
@@ -212,7 +219,7 @@ const GuidedMode = () => {
                     value={[stepSpeed]}
                     onValueChange={([v]) => setStepSpeed(v)}
                     min={500}
-                    max={5000}
+                    max={6000}
                     step={100}
                     className="flex-1"
                   />
