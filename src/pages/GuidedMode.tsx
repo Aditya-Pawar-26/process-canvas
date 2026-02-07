@@ -8,6 +8,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { scenarios } from '@/data/scenarios';
 import { Scenario, ProcessNode } from '@/types/process';
 import { useProcessTree } from '@/hooks/useProcessTree';
+import { useProcessTreeContext } from '@/contexts/ProcessTreeContext';
 import { TreeVisualization } from '@/components/TreeVisualization';
 import { ConsoleLog } from '@/components/ConsoleLog';
 import { Play, Pause, RotateCcw, ChevronLeft, ChevronRight, BookOpen } from 'lucide-react';
@@ -20,6 +21,9 @@ const GuidedMode = () => {
   );
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(false);
+  
+  // Get voice mode from context
+  const { voiceModeEnabled, speakEvent, speakRaw } = useProcessTreeContext();
 
   const {
     root,
@@ -61,28 +65,55 @@ const GuidedMode = () => {
     switch (step.action) {
       case 'fork':
         // For guided mode, fork from root to show single fork behavior
-        forkProcess(root.pid);
+        const newChild = forkProcess(root.pid);
+        if (voiceModeEnabled && newChild) {
+          speakEvent('process_created', { pid: newChild.pid, parentPid: root.pid });
+        }
         break;
       case 'wait':
         waitProcess(root.pid);
+        if (voiceModeEnabled) {
+          const runningChildren = root.children.filter(c => c.state === 'running' || c.state === 'orphan');
+          speakEvent('parent_waiting', { 
+            pid: root.pid, 
+            childPid: runningChildren.length > 0 ? runningChildren[0].pid : undefined 
+          });
+        }
         break;
       case 'exit':
         // Exit the first running child (zombie scenario)
         const children = root.children.filter(c => c.state === 'running' || c.state === 'orphan');
         if (children.length > 0) {
-          exitProcess(children[0].pid);
+          const childPid = children[0].pid;
+          const parentWaiting = root.state === 'waiting';
+          exitProcess(childPid);
+          
+          if (voiceModeEnabled) {
+            if (parentWaiting) {
+              speakEvent('process_reaped', { pid: childPid, parentPid: root.pid });
+            } else {
+              speakEvent('zombie_created', { pid: childPid, parentPid: root.pid });
+            }
+          }
         }
         break;
       case 'orphan':
         // Orphan scenario: parent (root) exits while child is running
-        // This makes the child an orphan
+        const orphanChildren = root.children.filter(c => c.state === 'running' || c.state === 'orphan');
         exitProcess(root.pid);
+        
+        if (voiceModeEnabled && orphanChildren.length > 0) {
+          speakEvent('orphan_adopted', { pid: orphanChildren[0].pid });
+        }
         break;
       case 'explain':
-        // No action needed, just show explanation
+        // Voice: read the OS explanation for this step
+        if (voiceModeEnabled && step.osExplanation) {
+          speakRaw(step.osExplanation);
+        }
         break;
     }
-  }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess]);
+  }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess, voiceModeEnabled, speakEvent, speakRaw]);
 
   useEffect(() => {
     if (isPlaying && currentStepIndex < selectedScenario.steps.length - 1) {

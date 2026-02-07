@@ -36,6 +36,8 @@ const Dashboard = () => {
     isAutoPlaying,
     speed,
     globalLogicalTime,
+    voiceModeEnabled,
+    speakEvent,
     setSelectedNode,
     setExecutionMode,
     createRootProcess,
@@ -78,10 +80,15 @@ const Dashboard = () => {
 
   const handleFork = useCallback(() => {
     if (!root) {
-      createRootProcess();
+      const newRoot = createRootProcess();
       setLastAction('Created root process (PID 1001)');
       setOsExplanation('The first user process is created. init (PID 1) already exists to adopt orphans.');
       setDsaExplanation('Root node of the process tree created. This is the ancestor of all child processes.');
+      
+      // Voice narration for process creation
+      if (voiceModeEnabled) {
+        speakEvent('process_created', { pid: newRoot.pid });
+      }
     } else {
       const newChildren = forkAllProcesses();
       const expectedTotal = Math.pow(2, forkCount + 1);
@@ -92,8 +99,15 @@ const Dashboard = () => {
       setDsaExplanation(
         `Each node at the current level spawns one child. Tree depth increases. This is exponential growth: n sequential forks create 2^n processes.`
       );
+      
+      // Voice narration for each new child
+      if (voiceModeEnabled && newChildren.length > 0) {
+        // Speak about the first child creation to avoid overwhelming audio
+        const firstChild = newChildren[0];
+        speakEvent('process_created', { pid: firstChild.pid, parentPid: firstChild.ppid });
+      }
     }
-  }, [root, forkCount, runningCount, createRootProcess, forkAllProcesses]);
+  }, [root, forkCount, runningCount, createRootProcess, forkAllProcesses, voiceModeEnabled, speakEvent]);
 
 
   const handleWait = useCallback(() => {
@@ -102,8 +116,17 @@ const Dashboard = () => {
       setLastAction(`wait() called by PID ${selectedNode.pid}`);
       setOsExplanation('wait() blocks the parent until a child terminates. If child already exited (zombie), it reaps it immediately. Prevents zombie accumulation.');
       setDsaExplanation('Postorder traversal pattern: children must complete before parent continues. Parent waits at this node.');
+      
+      // Voice narration for parent waiting
+      if (voiceModeEnabled) {
+        const runningChildren = selectedNode.children.filter(c => c.state === 'running' || c.state === 'orphan');
+        speakEvent('parent_waiting', { 
+          pid: selectedNode.pid, 
+          childPid: runningChildren.length > 0 ? runningChildren[0].pid : undefined 
+        });
+      }
     }
-  }, [selectedNode, waitProcess]);
+  }, [selectedNode, waitProcess, voiceModeEnabled, speakEvent]);
 
   const handleExit = useCallback((pid?: number) => {
     const targetPid = pid ?? selectedNode?.pid;
@@ -113,16 +136,39 @@ const Dashboard = () => {
     if (!targetNode) return;
     
     const hasChildren = targetNode.children.some(c => c.state === 'running' || c.state === 'orphan');
+    const parentNode = root ? getAllRunningProcesses(root).find(p => p.pid === targetNode.ppid) : null;
+    const parentWasWaiting = parentNode?.state === 'waiting';
+    
     exitProcess(targetPid);
     setLastAction(`exit() called by PID ${targetPid}`);
+    
     if (hasChildren) {
       setOsExplanation('Process exited with running children → children become ORPHANS. They are re-parented to init (PID 1) which will eventually wait() for them.');
       setDsaExplanation('Deleting an internal node: children must be moved to another parent (init). Maintains tree integrity.');
+      
+      // Voice: orphan adoption
+      if (voiceModeEnabled) {
+        const orphanChild = targetNode.children.find(c => c.state === 'running' || c.state === 'orphan');
+        if (orphanChild) {
+          speakEvent('orphan_adopted', { pid: orphanChild.pid });
+        }
+      }
     } else {
       setOsExplanation('Process exited. If parent was waiting → normal termination. If parent NOT waiting → becomes ZOMBIE until parent calls wait().');
       setDsaExplanation('Leaf node removal. Node state changes but structure preserved until parent acknowledges.');
+      
+      // Voice: normal exit or zombie
+      if (voiceModeEnabled) {
+        if (parentWasWaiting) {
+          speakEvent('process_reaped', { pid: targetPid, parentPid: targetNode.ppid });
+        } else if (parentNode && parentNode.state === 'running') {
+          speakEvent('zombie_created', { pid: targetPid, parentPid: targetNode.ppid });
+        } else {
+          speakEvent('process_exit', { pid: targetPid });
+        }
+      }
     }
-  }, [selectedNode, root, exitProcess, getAllRunningProcesses]);
+  }, [selectedNode, root, exitProcess, getAllRunningProcesses, voiceModeEnabled, speakEvent]);
 
   // Handle scoped execution step
   const handleScopedStep = useCallback(() => {
