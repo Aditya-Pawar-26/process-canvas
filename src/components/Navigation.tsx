@@ -12,13 +12,15 @@ import {
   Menu,
   X,
   Compass,
-  ClipboardCheck
+  ClipboardCheck,
+  Clock
 } from 'lucide-react';
 import { useState, forwardRef } from 'react';
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/dashboard', label: 'Dashboard', icon: Play },
+  { path: '/gantt', label: 'Gantt Chart', icon: Clock },
   { path: '/scenarios', label: 'Scenarios', icon: Library },
   { path: '/guided', label: 'Guided Mode', icon: Compass },
   { path: '/code-editor', label: 'Code Editor', icon: Code },
@@ -46,7 +48,7 @@ export const Navigation = forwardRef<HTMLElement>((_, ref) => {
 
         {/* Desktop Navigation */}
         <div className="hidden md:flex items-center space-x-1 flex-1">
-          {navItems.slice(1, 8).map((item) => (
+          {navItems.slice(1, 9).map((item) => (
             <Link key={item.path} to={item.path}>
               <Button
                 variant="ghost"
