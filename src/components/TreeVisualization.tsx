@@ -8,6 +8,7 @@ interface TreeVisualizationProps {
   highlightedNodeId?: string | null;
   executionPathPids?: Set<number>;
   executedPids?: Set<number>;
+  currentExecutingPid?: number | null;
   isScopedExecution?: boolean;
   onSelectNode: (node: ProcessNode) => void;
   onFork: (pid: number) => void;
@@ -32,6 +33,7 @@ export const TreeVisualization = ({
   highlightedNodeId,
   executionPathPids,
   executedPids,
+  currentExecutingPid,
   isScopedExecution = false,
   onSelectNode,
   onFork,
@@ -49,6 +51,18 @@ export const TreeVisualization = ({
   const isNodeExecuted = (node: ProcessNode): boolean => {
     if (!isScopedExecution || !executedPids) return false;
     return executedPids.has(node.pid);
+  };
+
+  // Determine if a node is currently executing (the active step)
+  const isNodeCurrentlyExecuting = (node: ProcessNode): boolean => {
+    if (!isScopedExecution || currentExecutingPid === null || currentExecutingPid === undefined) return false;
+    return node.pid === currentExecutingPid;
+  };
+
+  // Determine if a node is pending (in path but not yet executed)
+  const isNodePending = (node: ProcessNode): boolean => {
+    if (!isScopedExecution || !executionPathPids || !executedPids) return false;
+    return executionPathPids.has(node.pid) && !executedPids.has(node.pid);
   };
 
   // Calculate positions using Reingold-Tilford style algorithm
@@ -199,19 +213,23 @@ export const TreeVisualization = ({
         {positions.map((pos) => {
           const isDimmed = shouldDimNode(pos.node);
           const isExecuted = isNodeExecuted(pos.node);
+          const isCurrentlyExecuting = isNodeCurrentlyExecuting(pos.node);
+          const isPending = isNodePending(pos.node);
           
           return (
             <div
               key={pos.node.id}
-              className={`absolute transition-all duration-500 ${isDimmed ? 'opacity-25 pointer-events-none' : ''}`}
+              className={`absolute transition-all duration-300 ${isDimmed ? 'opacity-25 pointer-events-none' : ''}`}
               style={{ left: pos.x, top: pos.y }}
             >
               <ProcessNodeCard
                 node={pos.node}
                 isSelected={selectedNode?.id === pos.node.id}
-                isHighlighted={highlightedNodeId === pos.node.id || isExecuted}
+                isHighlighted={highlightedNodeId === pos.node.id}
                 isDimmed={isDimmed}
                 isExecuted={isExecuted}
+                isCurrentlyExecuting={isCurrentlyExecuting}
+                isPending={isPending}
                 onSelect={onSelectNode}
                 onFork={onFork}
                 onWait={onWait}
