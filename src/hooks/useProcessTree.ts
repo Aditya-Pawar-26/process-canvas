@@ -381,11 +381,19 @@ export const useProcessTree = () => {
     }
 
     // Determine exit state based on parent's state
-    // ZOMBIE: Parent exists and is NOT waiting (hasn't called wait())
-    // TERMINATED: Parent called wait() (was in waiting state)
+    // UNIX-correct logic:
+    // 1. If parent is init (PID 1) → always reaped immediately (init always calls wait)
+    // 2. If parent called wait() → reaped immediately
+    // 3. If parent is running but not waiting → ZOMBIE
+    // 4. No parent → terminated
     let newState: ProcessState;
     
-    if (parent?.state === 'waiting') {
+    if (node.ppid === 1) {
+      // Parent is init - init always reaps immediately, no zombies possible
+      newState = 'terminated';
+      addLog('info', `[INFO] PID ${pid} exited`, pid);
+      addLog('success', `exit() by PID ${pid} → Reaped immediately by init (PID 1)`, pid);
+    } else if (parent?.state === 'waiting') {
       // Parent was waiting - child terminates normally and is reaped
       newState = 'terminated';
       addLog('info', `[INFO] Child PID ${pid} exited`, pid);
@@ -398,7 +406,7 @@ export const useProcessTree = () => {
       addLog('error', `[STATE] PID ${pid} entered ZOMBIE state`, pid);
       addLog('info', `💀 Zombie: Process terminated but entry remains until parent calls wait()`, pid);
     } else {
-      // No parent or parent is init - just terminate
+      // No parent - just terminate
       newState = 'terminated';
       addLog('info', `[INFO] PID ${pid} exited`, pid);
     }
