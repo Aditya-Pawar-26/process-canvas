@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { ProcessNode, ProcessState, LogEntry } from '@/types/process';
+import { type ProcessNode, type ProcessState, type LogEntry } from '@/types/process';
 
 let pidCounter = 1000;
 let logIdCounter = 0;
