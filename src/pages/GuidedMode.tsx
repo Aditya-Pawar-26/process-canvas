@@ -14,6 +14,16 @@ import { ConsoleLog } from '@/components/ConsoleLog';
 import { Play, Pause, RotateCcw, ChevronLeft, ChevronRight, BookOpen } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 
+// Helper to flatten all nodes in the tree
+const getAllNodesFlat = (node: ProcessNode | null): ProcessNode[] => {
+  if (!node) return [];
+  const result: ProcessNode[] = [node];
+  for (const child of node.children) {
+    result.push(...getAllNodesFlat(child));
+  }
+  return result;
+};
+
 const GuidedMode = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -29,11 +39,13 @@ const GuidedMode = () => {
 
   const {
     root,
+    initProcess,
     logs,
     selectedNode,
     setSelectedNode,
     createRootProcess,
     forkProcess,
+    forkAllProcesses,
     waitProcess,
     exitProcess,
     resetTree
@@ -66,10 +78,26 @@ const GuidedMode = () => {
 
     switch (step.action) {
       case 'fork':
-        // For guided mode, fork from root to show single fork behavior
-        const newChild = forkProcess(root.pid);
-        if (voiceModeEnabled && newChild) {
-          speakEvent('process_created', { pid: newChild.pid, parentPid: root.pid });
+        // Use exponential fork for multi-fork scenarios, single fork otherwise
+        if (selectedScenario.id === 'multiple-fork') {
+          const newChildren = forkAllProcesses();
+          if (voiceModeEnabled && newChildren.length > 0) {
+            speakEvent('process_created', { pid: newChildren[0].pid, parentPid: root.pid });
+          }
+        } else if (selectedScenario.id === 'recursive-fork') {
+          // Recursive: fork from last child in chain
+          const allNodes = getAllNodesFlat(root);
+          const deepest = allNodes.filter(n => n.state === 'running').sort((a, b) => b.depth - a.depth)[0];
+          const target = deepest || root;
+          const newChild = forkProcess(target.pid);
+          if (voiceModeEnabled && newChild) {
+            speakEvent('process_created', { pid: newChild.pid, parentPid: target.pid });
+          }
+        } else {
+          const newChild = forkProcess(root.pid);
+          if (voiceModeEnabled && newChild) {
+            speakEvent('process_created', { pid: newChild.pid, parentPid: root.pid });
+          }
         }
         break;
       case 'wait':
@@ -115,7 +143,7 @@ const GuidedMode = () => {
         }
         break;
     }
-  }, [currentStepIndex, selectedScenario, root, forkProcess, waitProcess, exitProcess, voiceModeEnabled, speakEvent, speakRaw]);
+  }, [currentStepIndex, selectedScenario, root, forkProcess, forkAllProcesses, waitProcess, exitProcess, voiceModeEnabled, speakEvent, speakRaw]);
 
   // Auto-set speed to 6 seconds when voice mode is enabled
   useEffect(() => {
@@ -261,14 +289,21 @@ const GuidedMode = () => {
           <div className="lg:col-span-2 space-y-4">
             <Card className="bg-card border-border min-h-[400px]">
               <CardContent className="p-0 h-[400px]">
-                <TreeVisualization
-                  root={root}
-                  selectedNode={selectedNode}
-                  onSelectNode={setSelectedNode}
-                  onFork={(pid) => forkProcess(pid)}
-                  onWait={(pid) => waitProcess(pid)}
-                  onExit={(pid) => exitProcess(pid)}
-                />
+                {/* Show init tree when orphans exist, otherwise show root */}
+                {(() => {
+                  const hasOrphans = initProcess?.children.some(c => c.state === 'orphan');
+                  const visualRoot = hasOrphans ? initProcess : root;
+                  return (
+                    <TreeVisualization
+                      root={visualRoot}
+                      selectedNode={selectedNode}
+                      onSelectNode={setSelectedNode}
+                      onFork={(pid) => forkProcess(pid)}
+                      onWait={(pid) => waitProcess(pid)}
+                      onExit={(pid) => exitProcess(pid)}
+                    />
+                  );
+                })()}
               </CardContent>
             </Card>
 
