@@ -611,6 +611,7 @@ export const useProcessTree = () => {
 
   return {
     root,
+    setRoot,
     initProcess,
     logs,
     selectedNode,

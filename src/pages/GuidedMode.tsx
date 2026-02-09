@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { scenarios } from '@/data/scenarios';
-import { Scenario, ProcessNode } from '@/types/process';
+import { Scenario, ProcessNode, ProcessState } from '@/types/process';
 import { useProcessTree } from '@/hooks/useProcessTree';
 import { useProcessTreeContext } from '@/contexts/ProcessTreeContext';
 import { TreeVisualization } from '@/components/TreeVisualization';
@@ -39,7 +39,7 @@ const GuidedMode = () => {
 
   const {
     root,
-    initProcess,
+    setRoot,
     logs,
     selectedNode,
     setSelectedNode,
@@ -48,6 +48,7 @@ const GuidedMode = () => {
     forkAllProcesses,
     waitProcess,
     exitProcess,
+    addLog,
     resetTree
   } = useProcessTree();
 
@@ -128,12 +129,28 @@ const GuidedMode = () => {
         }
         break;
       case 'orphan':
-        // Orphan scenario: parent (root) exits while child is running
-        const orphanChildren = root.children.filter(c => c.state === 'running' || c.state === 'orphan');
-        exitProcess(root.pid);
-        
-        if (voiceModeEnabled && orphanChildren.length > 0) {
-          speakEvent('orphan_adopted', { pid: orphanChildren[0].pid });
+        // Orphan scenario: directly update tree to keep parent-child visual structure
+        // Parent shown as terminated, child shown as orphan underneath
+        if (root) {
+          const orphanKids = root.children.filter(c => c.state === 'running');
+          const updatedRoot: ProcessNode = {
+            ...root,
+            state: 'terminated',
+            children: root.children.map(c =>
+              c.state === 'running'
+                ? { ...c, state: 'orphan' as ProcessState, ppid: 1, isOrphan: true }
+                : c
+            ),
+          };
+          setRoot(updatedRoot);
+          addLog('warning', `Parent PID ${root.pid} exited while children still running`, root.pid);
+          orphanKids.forEach(c => {
+            addLog('warning', `PID ${c.pid} became ORPHAN — adopted by init (PID 1)`, c.pid);
+          });
+          
+          if (voiceModeEnabled && orphanKids.length > 0) {
+            speakEvent('orphan_adopted', { pid: orphanKids[0].pid });
+          }
         }
         break;
       case 'explain':
@@ -289,21 +306,14 @@ const GuidedMode = () => {
           <div className="lg:col-span-2 space-y-4">
             <Card className="bg-card border-border min-h-[400px]">
               <CardContent className="p-0 h-[400px]">
-                {/* Show init tree when orphans exist, otherwise show root */}
-                {(() => {
-                  const hasOrphans = initProcess?.children.some(c => c.state === 'orphan');
-                  const visualRoot = hasOrphans ? initProcess : root;
-                  return (
-                    <TreeVisualization
-                      root={visualRoot}
-                      selectedNode={selectedNode}
-                      onSelectNode={setSelectedNode}
-                      onFork={(pid) => forkProcess(pid)}
-                      onWait={(pid) => waitProcess(pid)}
-                      onExit={(pid) => exitProcess(pid)}
-                    />
-                  );
-                })()}
+                <TreeVisualization
+                  root={root}
+                  selectedNode={selectedNode}
+                  onSelectNode={setSelectedNode}
+                  onFork={(pid) => forkProcess(pid)}
+                  onWait={(pid) => waitProcess(pid)}
+                  onExit={(pid) => exitProcess(pid)}
+                />
               </CardContent>
             </Card>
 
