@@ -120,7 +120,7 @@ const GuidedMode = () => {
   // Auto-set speed to 6 seconds when voice mode is enabled
   useEffect(() => {
     if (voiceModeEnabled) {
-      setStepSpeed(6000);
+      setStepSpeed(7000);
     }
   }, [voiceModeEnabled]);
 
@@ -219,7 +219,7 @@ const GuidedMode = () => {
                     value={[stepSpeed]}
                     onValueChange={([v]) => setStepSpeed(v)}
                     min={500}
-                    max={6000}
+                    max={7000}
                     step={100}
                     className="flex-1"
                   />

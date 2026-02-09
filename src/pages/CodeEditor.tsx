@@ -382,7 +382,7 @@ export default function CodeEditor() {
                 </div>
                 <div className="flex items-center gap-2 flex-1 min-w-[180px]">
                   <Gauge className="w-4 h-4 text-muted-foreground" />
-                  <Slider value={[speed]} onValueChange={([v]) => setSpeed(v)} min={200} max={6000} step={100} className="flex-1" />
+                  <Slider value={[speed]} onValueChange={([v]) => setSpeed(v)} min={200} max={7000} step={100} className="flex-1" />
                   <span className="text-xs text-muted-foreground font-mono w-14 text-right">{(speed / 1000).toFixed(1)}s</span>
                 </div>
               </div>
