@@ -411,15 +411,23 @@ export const useProcessTree = () => {
       addLog('info', `[INFO] PID ${pid} exited`, pid);
     }
 
-    // Build the updated tree
+    // Build the updated tree - keep orphan children in place for visual hierarchy
+    const markOrphans = (children: ProcessNode[]): ProcessNode[] => {
+      return children.map(c => {
+        if (c.state === 'running' || c.state === 'orphan') {
+          return { ...c, ppid: 1, state: 'orphan' as ProcessState, isOrphan: true };
+        }
+        return c;
+      });
+    };
+
     const updateTree = (n: ProcessNode): ProcessNode => {
       if (n.pid === pid) {
-        // Mark this process as zombie/terminated
-        // Keep children in tree but they'll be moved to init
         return {
           ...n,
           state: newState,
-          children: n.children.filter(c => c.state !== 'running' && c.state !== 'orphan'),
+          // Keep children in tree but mark active ones as orphans
+          children: activeChildren.length > 0 ? markOrphans(n.children) : n.children,
         };
       }
       return {
@@ -430,24 +438,8 @@ export const useProcessTree = () => {
 
     let updatedRoot = updateTree(root);
 
-    // Move orphans to init - they are STILL RUNNING, just adopted
-    if (activeChildren.length > 0 && initProcess) {
-      const orphans = activeChildren.map(c => ({
-        ...c,
-        ppid: 1,
-        state: 'orphan' as ProcessState, // Orphan = running but parent exited
-        isOrphan: true,
-        depth: 1,
-      }));
-
-      setInitProcess(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          children: [...prev.children.filter(c => c.pid !== root.pid), updatedRoot, ...orphans],
-        };
-      });
-    } else if (initProcess) {
+    // Sync init process tree
+    if (initProcess) {
       setInitProcess(prev => {
         if (!prev) return prev;
         return {
