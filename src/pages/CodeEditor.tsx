@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Navigation } from '@/components/Navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,114 +7,169 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
-import { Play, RotateCcw, Pause, SkipForward, Code, Terminal, Info, Skull, UserX, Gauge } from 'lucide-react';
+import { Play, RotateCcw, Pause, SkipForward, Code, Terminal, Info, Skull, UserX, Gauge, Lightbulb, FileCode } from 'lucide-react';
 import { useCodeSimulator, SimProcess } from '@/hooks/useCodeSimulator';
+import { ProcessTreeView } from '@/components/code-editor/ProcessTreeView';
+import { SyntaxHighlightedCode } from '@/components/code-editor/SyntaxHighlightedCode';
 
-// Each template has DISTINCT code that produces DIFFERENT OS outcomes.
-// Notes on presets:
-// - We still parse ONLY fork()/wait()/exit()/sleep().
-// - Presets can add simple execution hints via inline comments:
-//     exit(0); // child   → only non-root processes execute this line
-//     wait(NULL); // parent → only the root/ppid=1 process executes this line
 const codeTemplates = [
   {
-    id: 'single-fork',
-    name: 'Single Fork',
-    description: 'Just fork - both processes keep running (no zombie/orphan)',
-    code: `#include <unistd.h>
+    id: 'basic-fork-if',
+    name: 'Fork with if/else',
+    description: 'Standard fork pattern with child/parent branching',
+    code: `#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 int main() {
-    fork();
-    // Both parent and child continue running
-    // No exit, no wait - all processes stay alive
+    printf("Parent starting\\n");
+    
+    if(fork() == 0) {
+        printf("I am the child, PID: %d\\n", getpid());
+        exit(0);
+    } else {
+        printf("I am the parent, waiting...\\n");
+        wait(NULL);
+        printf("Child finished\\n");
+    }
 }`,
   },
   {
-    id: 'fork-wait-clean',
-    name: 'Fork + Wait (Clean)',
-    description: 'Child exits; parent waits & reaps → no zombie, no orphan',
-    code: `#include <sys/wait.h>
+    id: 'single-fork',
+    name: 'Simple Fork',
+    description: 'Both processes continue running',
+    code: `#include <stdio.h>
 #include <unistd.h>
 
 int main() {
     fork();
-    exit(0); // child: exits first
-    wait(NULL); // parent: waits and reaps child
+    printf("Hello from PID %d\\n", getpid());
 }`,
   },
   {
     id: 'zombie-demo',
     name: 'Zombie Process',
-    description: 'Child exits; parent does NOT wait → zombie persists',
-    code: `#include <unistd.h>
+    description: 'Child exits but parent never calls wait()',
+    code: `#include <stdio.h>
+#include <unistd.h>
 
 int main() {
-    fork();
-    exit(0); // child: exits
-    sleep(1); // parent: does NOT call wait()
-    // Child becomes zombie because parent didn't wait
+    if(fork() == 0) {
+        printf("Child exiting\\n");
+        exit(0);
+    } else {
+        printf("Parent sleeping, not calling wait()\\n");
+        sleep(3);
+    }
 }`,
   },
   {
     id: 'orphan-demo',
     name: 'Orphan Process',
-    description: 'Parent exits first → child becomes orphan (adopted by init)',
-    code: `#include <unistd.h>
-
-int main() {
-    fork();
-    exit(0); // parent: exits first
-    sleep(1); // child: continues running as orphan
-}`,
-  },
-  {
-    id: 'proper-cleanup',
-    name: 'Proper Cleanup',
-    description: 'fork → child exit → parent wait → clean',
-    code: `#include <sys/wait.h>
+    description: 'Parent exits first, child adopted by init',
+    code: `#include <stdio.h>
 #include <unistd.h>
 
 int main() {
-    fork();
-    exit(0); // child: exits
-    wait(NULL); // parent: reaps child
-    // No zombie because parent waited
+    if(fork() == 0) {
+        sleep(2);
+        printf("Child still running, adopted by init\\n");
+        printf("My new PPID: %d\\n", getppid());
+    } else {
+        printf("Parent exiting immediately\\n");
+        exit(0);
+    }
 }`,
   },
   {
     id: 'double-fork',
     name: 'Double Fork',
-    description: 'Two forks → 4 running processes (no zombie/orphan)',
-    code: `#include <unistd.h>
+    description: '2 forks → 4 processes',
+    code: `#include <stdio.h>
+#include <unistd.h>
 
 int main() {
     fork();
     fork();
-    // 4 processes: original, child1, child2, grandchild
-    // All stay running - no exit calls
+    printf("PID %d, PPID %d\\n", getpid(), getppid());
 }`,
   },
   {
     id: 'triple-fork',
     name: 'Triple Fork',
-    description: 'Three forks → 8 running processes (no zombie/orphan)',
-    code: `#include <unistd.h>
+    description: '3 forks → 8 processes',
+    code: `#include <stdio.h>
+#include <unistd.h>
 
 int main() {
     fork();
     fork();
     fork();
-    // 8 processes total - all stay running
+    printf("PID %d\\n", getpid());
+}`,
+  },
+  {
+    id: 'fork-wait-clean',
+    name: 'Fork + Wait (Clean)',
+    description: 'Proper cleanup with wait()',
+    code: `#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    if(fork() == 0) {
+        printf("Child PID %d doing work\\n", getpid());
+        sleep(1);
+        printf("Child done\\n");
+        exit(0);
+    } else {
+        printf("Parent waiting for child\\n");
+        wait(NULL);
+        printf("Parent: child reaped, no zombie\\n");
+    }
+}`,
+  },
+  {
+    id: 'chain-fork',
+    name: 'Chain Fork',
+    description: 'Only child forks again → linear chain',
+    code: `#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    if(fork() == 0) {
+        printf("Child 1, PID %d\\n", getpid());
+        if(fork() == 0) {
+            printf("Grandchild, PID %d\\n", getpid());
+            exit(0);
+        }
+        wait(NULL);
+        exit(0);
+    }
+    wait(NULL);
+    printf("All children done\\n");
 }`,
   },
 ];
 
+const DEFAULT_CODE = `#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    // Write your fork code here
+    fork();
+    printf("Hello from PID %d\\n", getpid());
+}`;
+
 export default function CodeEditor() {
-  const [selectedTemplate, setSelectedTemplate] = useState<string>(codeTemplates[0].id);
-  const [code, setCode] = useState(codeTemplates[0].code);
+  const [selectedTemplate, setSelectedTemplate] = useState<string>('');
+  const [code, setCode] = useState(DEFAULT_CODE);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1000);
-  
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   const {
     processes,
     statements,
@@ -125,7 +180,7 @@ export default function CodeEditor() {
     executeStep,
     reset,
     getCurrentStatement,
-    getProcessStats
+    getProcessStats,
   } = useCodeSimulator();
 
   const handleTemplateChange = (templateId: string) => {
@@ -145,9 +200,7 @@ export default function CodeEditor() {
     setIsPlaying(true);
   }, [processes.length, code, initializeSimulation]);
 
-  const handlePause = () => {
-    setIsPlaying(false);
-  };
+  const handlePause = () => setIsPlaying(false);
 
   const handleStep = useCallback(() => {
     if (processes.length === 0) {
@@ -162,105 +215,43 @@ export default function CodeEditor() {
     setIsPlaying(false);
   };
 
-  // Auto-play effect
   useEffect(() => {
     if (isPlaying && !isComplete) {
-      const timer = setTimeout(() => {
-        executeStep();
-      }, speed);
+      const timer = setTimeout(() => executeStep(), speed);
       return () => clearTimeout(timer);
     } else if (isComplete) {
       setIsPlaying(false);
     }
   }, [isPlaying, isComplete, executeStep, stepCount, speed]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in textarea
+      if (e.target instanceof HTMLTextAreaElement) return;
+      if (e.code === 'Space') { e.preventDefault(); isPlaying ? handlePause() : handleRun(); }
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); handleStep(); }
+      if (e.key === 'r' || e.key === 'R') { e.preventDefault(); handleReset(); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isPlaying, handleRun, handleStep]);
+
   const currentStatement = getCurrentStatement();
   const currentLine = currentStatement?.lineNumber ?? -1;
   const stats = getProcessStats();
 
-  const getStateStyles = (state: SimProcess['state']) => {
-    switch (state) {
-      case 'running':
-        return 'border-process-running bg-process-running/20 text-foreground';
-      case 'waiting':
-        return 'border-process-waiting bg-process-waiting/20 text-foreground';
-      case 'zombie':
-        return 'border-process-zombie bg-process-zombie/20 border-dashed';
-      case 'orphan':
-        return 'border-process-orphan bg-process-orphan/20 border-dashed';
-      case 'terminated':
-        return 'border-muted bg-muted/20 opacity-50';
-      default:
-        return 'border-border';
+  // Handle tab key in textarea
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const newCode = code.substring(0, start) + '    ' + code.substring(end);
+      setCode(newCode);
+      setTimeout(() => { ta.selectionStart = ta.selectionEnd = start + 4; }, 0);
     }
-  };
-
-  const getStateLabel = (state: SimProcess['state']) => {
-    const labels: Record<string, { label: string; icon: React.ReactNode }> = {
-      running: { label: 'Running', icon: null },
-      waiting: { label: 'Waiting', icon: null },
-      zombie: { label: 'Zombie', icon: <Skull className="w-3 h-3" /> },
-      orphan: { label: 'Orphan', icon: <UserX className="w-3 h-3" /> },
-      terminated: { label: 'Exited', icon: null }
-    };
-    return labels[state] || { label: state, icon: null };
-  };
-
-  const renderProcessTree = (procs: SimProcess[], depth: number = 0): JSX.Element[] => {
-    return procs.map((proc) => {
-      const stateInfo = getStateLabel(proc.state);
-      
-      return (
-        <div key={proc.pid} className="flex flex-col items-center">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div
-                className={`rounded-lg border-2 p-3 text-center transition-all duration-300 min-w-[110px] cursor-help ${getStateStyles(proc.state)}`}
-              >
-                <div className="font-mono text-sm font-bold">PID {proc.pid}</div>
-                <div className="text-xs text-muted-foreground">PPID: {proc.ppid}</div>
-                <Badge 
-                  variant="outline" 
-                  className={`text-xs mt-1 gap-1 ${
-                    proc.state === 'zombie' ? 'border-process-zombie text-process-zombie' :
-                    proc.state === 'orphan' ? 'border-process-orphan text-process-orphan' : ''
-                  }`}
-                >
-                  {stateInfo.icon}
-                  {stateInfo.label}
-                </Badge>
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="right" className="max-w-[250px]">
-              {proc.state === 'zombie' && (
-                <p>Process terminated but parent hasn't called wait(). Exit status not collected.</p>
-              )}
-              {proc.state === 'orphan' && (
-                <p>Parent exited. Process adopted by init (PID 1). Still running.</p>
-              )}
-              {proc.state === 'running' && (
-                <p>Process is actively executing.</p>
-              )}
-              {proc.state === 'waiting' && (
-                <p>Blocked on wait() until child exits.</p>
-              )}
-              {proc.state === 'terminated' && (
-                <p>Process has cleanly exited.</p>
-              )}
-            </TooltipContent>
-          </Tooltip>
-          
-          {proc.children.filter(c => c.state !== 'terminated').length > 0 && (
-            <>
-              <div className="w-px h-4 bg-primary/40" />
-              <div className="flex gap-3">
-                {renderProcessTree(proc.children.filter(c => c.state !== 'terminated'), depth + 1)}
-              </div>
-            </>
-          )}
-        </div>
-      );
-    });
   };
 
   return (
@@ -269,10 +260,12 @@ export default function CodeEditor() {
 
       <main className="container py-6">
         <div className="text-center mb-6">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Process Simulator</h1>
-          <p className="text-muted-foreground flex items-center justify-center gap-2">
-            <Info className="w-4 h-4" />
-            This editor simulates OS behavior logically; it does not execute real C code.
+          <h1 className="text-3xl font-bold text-foreground mb-2 flex items-center justify-center gap-2">
+            <FileCode className="w-8 h-8 text-primary" />
+            C Process Simulator
+          </h1>
+          <p className="text-muted-foreground text-sm max-w-2xl mx-auto">
+            Write any C code using <code className="text-primary font-mono">fork()</code>, <code className="text-primary font-mono">wait()</code>, <code className="text-primary font-mono">exit()</code>, <code className="text-primary font-mono">sleep()</code>, and <code className="text-primary font-mono">printf()</code> — the simulator parses and visualizes OS process behavior step-by-step.
           </p>
         </div>
 
@@ -280,14 +273,14 @@ export default function CodeEditor() {
           {/* Code Panel */}
           <Card className="bg-card border-border">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
                   <Code className="w-5 h-5 text-primary" />
-                  Code Editor
+                  Editor
                 </CardTitle>
                 <Select value={selectedTemplate} onValueChange={handleTemplateChange}>
-                  <SelectTrigger className="w-48">
-                    <SelectValue placeholder="Select template" />
+                  <SelectTrigger className="w-52">
+                    <SelectValue placeholder="Load example..." />
                   </SelectTrigger>
                   <SelectContent>
                     {codeTemplates.map((t) => (
@@ -303,10 +296,11 @@ export default function CodeEditor() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="bg-background rounded-lg border border-border overflow-hidden">
+              {/* Code editor with line numbers */}
+              <div className="bg-background rounded-lg border border-border overflow-hidden relative">
                 <div className="flex">
                   {/* Line numbers */}
-                  <div className="bg-muted/30 px-3 py-4 text-right select-none border-r border-border">
+                  <div className="bg-muted/30 px-3 py-4 text-right select-none border-r border-border min-w-[3rem]">
                     {code.split('\n').map((_, i) => (
                       <div
                         key={i}
@@ -320,17 +314,30 @@ export default function CodeEditor() {
                       </div>
                     ))}
                   </div>
-                  {/* Code */}
-                  <textarea
-                    value={code}
-                    onChange={(e) => {
-                      setCode(e.target.value);
-                      reset();
-                    }}
-                    className="flex-1 bg-transparent p-4 font-mono text-sm text-foreground resize-none focus:outline-none min-h-[300px] leading-6"
-                    spellCheck={false}
-                  />
+                  {/* Editor area with syntax overlay */}
+                  <div className="relative flex-1">
+                    {/* Syntax highlighted overlay (read-only visual) */}
+                    <SyntaxHighlightedCode code={code} currentLine={currentLine} />
+                    {/* Actual textarea (transparent text, handles input) */}
+                    <textarea
+                      ref={textareaRef}
+                      value={code}
+                      onChange={(e) => { setCode(e.target.value); reset(); setIsPlaying(false); }}
+                      onKeyDown={handleKeyDown}
+                      className="absolute inset-0 w-full h-full bg-transparent p-4 font-mono text-sm resize-none focus:outline-none leading-6 text-transparent caret-foreground z-10"
+                      spellCheck={false}
+                      style={{ caretColor: 'hsl(var(--foreground))' }}
+                    />
+                  </div>
                 </div>
+              </div>
+
+              {/* Supported functions hint */}
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Lightbulb className="w-3 h-3" />
+                <span>
+                  Supports: <code className="text-primary/80">fork()</code>, <code className="text-primary/80">if(fork()==0)</code>, <code className="text-primary/80">wait()</code>, <code className="text-primary/80">exit()</code>, <code className="text-primary/80">sleep()</code>, <code className="text-primary/80">printf()</code>
+                </span>
               </div>
 
               {/* Controls */}
@@ -338,8 +345,7 @@ export default function CodeEditor() {
                 <div className="flex gap-2">
                   {isPlaying ? (
                     <Button onClick={handlePause} variant="outline" className="gap-2">
-                      <Pause className="w-4 h-4" />
-                      Pause
+                      <Pause className="w-4 h-4" /> Pause
                     </Button>
                   ) : (
                     <Button onClick={handleRun} className="gap-2 glow-primary" disabled={isComplete}>
@@ -348,29 +354,16 @@ export default function CodeEditor() {
                     </Button>
                   )}
                   <Button onClick={handleStep} variant="outline" className="gap-2" disabled={isComplete}>
-                    <SkipForward className="w-4 h-4" />
-                    Step
+                    <SkipForward className="w-4 h-4" /> Step
                   </Button>
                   <Button onClick={handleReset} variant="outline" className="gap-2">
-                    <RotateCcw className="w-4 h-4" />
-                    Reset
+                    <RotateCcw className="w-4 h-4" /> Reset
                   </Button>
                 </div>
-
-                {/* Speed Control */}
                 <div className="flex items-center gap-2 flex-1 min-w-[180px]">
                   <Gauge className="w-4 h-4 text-muted-foreground" />
-                  <Slider
-                    value={[speed]}
-                    onValueChange={([v]) => setSpeed(v)}
-                    min={200}
-                    max={6000}
-                    step={100}
-                    className="flex-1"
-                  />
-                  <span className="text-xs text-muted-foreground font-mono w-14 text-right">
-                    {(speed / 1000).toFixed(1)}s
-                  </span>
+                  <Slider value={[speed]} onValueChange={([v]) => setSpeed(v)} min={200} max={6000} step={100} className="flex-1" />
+                  <span className="text-xs text-muted-foreground font-mono w-14 text-right">{(speed / 1000).toFixed(1)}s</span>
                 </div>
               </div>
 
@@ -378,22 +371,16 @@ export default function CodeEditor() {
               {processes.length > 0 && (
                 <div className="flex gap-2 mt-4 flex-wrap">
                   <Badge variant="outline">Total: {stats.total}</Badge>
-                  <Badge variant="outline" className="border-process-running text-process-running">
-                    Running: {stats.running}
-                  </Badge>
-                  <Badge variant="outline" className="border-process-waiting text-process-waiting">
-                    Waiting: {stats.waiting}
-                  </Badge>
+                  <Badge variant="outline" className="border-process-running text-process-running">Running: {stats.running}</Badge>
+                  <Badge variant="outline" className="border-process-waiting text-process-waiting">Waiting: {stats.waiting}</Badge>
                   {stats.zombie > 0 && (
                     <Badge variant="outline" className="border-process-zombie text-process-zombie">
-                      <Skull className="w-3 h-3 mr-1" />
-                      Zombie: {stats.zombie}
+                      <Skull className="w-3 h-3 mr-1" /> Zombie: {stats.zombie}
                     </Badge>
                   )}
                   {stats.orphan > 0 && (
                     <Badge variant="outline" className="border-process-orphan text-process-orphan">
-                      <UserX className="w-3 h-3 mr-1" />
-                      Orphan: {stats.orphan}
+                      <UserX className="w-3 h-3 mr-1" /> Orphan: {stats.orphan}
                     </Badge>
                   )}
                 </div>
@@ -405,6 +392,9 @@ export default function CodeEditor() {
                   <div className="flex items-center gap-2 mb-2">
                     <Badge>Step {stepCount + 1}</Badge>
                     <span className="font-mono text-sm text-primary">{currentStatement.type}()</span>
+                    {currentStatement.scope !== 'any' && (
+                      <Badge variant="outline" className="text-xs">{currentStatement.scope} only</Badge>
+                    )}
                   </div>
                   <p className="text-sm text-muted-foreground">{currentStatement.osExplanation}</p>
                 </div>
@@ -414,29 +404,12 @@ export default function CodeEditor() {
 
           {/* Visualization Panel */}
           <div className="space-y-4">
-            <Card className="bg-card border-border">
-              <CardHeader className="pb-3">
-                <CardTitle>Process Tree</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="min-h-[250px] flex items-center justify-center">
-                  {processes.length === 0 ? (
-                    <div className="text-center text-muted-foreground">
-                      <p>Click "Run" or "Step" to start simulation</p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center gap-2">
-                      {renderProcessTree(processes)}
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            <ProcessTreeView processes={processes} />
 
             {/* Console Output */}
             <Card className="bg-card border-border">
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
                   <Terminal className="w-5 h-5 text-primary" />
                   Console Output
                 </CardTitle>
@@ -448,12 +421,13 @@ export default function CodeEditor() {
                   ) : (
                     <div className="space-y-0.5">
                       {logs.map((log, i) => (
-                        <div 
-                          key={i} 
+                        <div
+                          key={i}
                           className={`${
                             log.includes('[WARN]') ? 'text-process-zombie' :
                             log.includes('[STATE]') ? 'text-process-waiting' :
                             log.includes('[FORK]') ? 'text-process-running' :
+                            log.includes('[PRINT]') ? 'text-primary' :
                             log.includes('[DONE]') ? 'text-primary' :
                             'text-foreground'
                           }`}
@@ -467,28 +441,29 @@ export default function CodeEditor() {
               </CardContent>
             </Card>
 
-            {/* Parsed Statements */}
+            {/* Parsed Instructions */}
             {statements.length > 0 && (
               <Card className="bg-card border-border">
                 <CardHeader className="pb-3">
-                  <CardTitle>Parsed OS Calls</CardTitle>
+                  <CardTitle className="text-base">Parsed Instructions</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[120px]">
+                  <ScrollArea className="h-[140px]">
                     <div className="space-y-1">
-                      {statements.map((stmt, i) => (
+                      {statements.filter(s => s.type !== 'noop' && s.type !== 'else-block' && s.type !== 'end-block').map((stmt, i) => (
                         <div
                           key={i}
                           className={`p-2 rounded text-sm flex items-center gap-2 ${
-                            currentStatement === stmt
-                              ? 'bg-primary/20 border border-primary'
-                              : 'bg-muted/30'
+                            currentStatement === stmt ? 'bg-primary/20 border border-primary' : 'bg-muted/30'
                           }`}
                         >
-                          <Badge variant="outline" className="font-mono text-xs">
-                            L{stmt.lineNumber}
-                          </Badge>
+                          {stmt.lineNumber > 0 && (
+                            <Badge variant="outline" className="font-mono text-xs">L{stmt.lineNumber}</Badge>
+                          )}
                           <span className="font-mono font-medium">{stmt.type}()</span>
+                          {stmt.scope !== 'any' && (
+                            <Badge variant="secondary" className="text-xs">{stmt.scope}</Badge>
+                          )}
                         </div>
                       ))}
                     </div>
