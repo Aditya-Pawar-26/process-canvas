@@ -252,7 +252,7 @@ const Dashboard = () => {
   // Auto-set speed to 6 seconds when voice mode is enabled
   useEffect(() => {
     if (voiceModeEnabled) {
-      setSpeed(6000);
+      setSpeed(7000);
     }
   }, [voiceModeEnabled, setSpeed]);
 
