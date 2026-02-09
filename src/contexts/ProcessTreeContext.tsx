@@ -79,11 +79,11 @@ interface ProcessTreeContextType {
   getCpuOwnerAtTime: (time: number) => number | null;
 }
 
-const ProcessTreeContext = createContext<ProcessTreeContextType | null>(null);
+const ProcessTreeContext = createContext<ProcessTreeContextType | undefined>(undefined);
 
 export const useProcessTreeContext = () => {
   const context = useContext(ProcessTreeContext);
-  if (!context) {
+  if (context === undefined) {
     throw new Error('useProcessTreeContext must be used within a ProcessTreeProvider');
   }
   return context;
