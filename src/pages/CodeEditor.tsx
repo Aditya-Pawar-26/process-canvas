@@ -109,6 +109,26 @@ int main() {
 }`,
   },
   {
+    id: 'fork-loop',
+    name: 'Fork in Loop',
+    description: 'for loop with fork → exponential processes',
+    code: `#include <stdio.h>
+#include <unistd.h>
+
+int main() {
+    for (int i = 0; i < 3; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            printf("Fork failed\\n");
+            return 1;
+        }
+    }
+    printf("Process PID: %d, Parent PID: %d\\n", getpid(), getppid());
+    sleep(1);
+    return 0;
+}`,
+  },
+  {
     id: 'fork-wait-clean',
     name: 'Fork + Wait (Clean)',
     description: 'Proper cleanup with wait()',

@@ -29,25 +29,85 @@ let pidCounter = 1000;
 const generatePid = () => ++pidCounter;
 
 /**
+ * Preprocess: unroll for-loops into repeated blocks.
+ * Supports: for(int i = 0; i < N; i++) { ... }
+ * Caps at 10 iterations for safety.
+ */
+function unrollForLoops(code: string): string {
+  let result = code;
+  let safety = 0;
+
+  // Repeatedly find and unroll the innermost for loop
+  while (safety++ < 20) {
+    const forMatch = result.match(
+      /for\s*\(\s*(?:int\s+)?\w+\s*=\s*(\d+)\s*;\s*\w+\s*(<=?|>=?)\s*(\d+)\s*;\s*\w+\s*(\+\+|--)\s*\)\s*\{/
+    );
+    if (!forMatch) break;
+
+    const start = parseInt(forMatch[1]);
+    const op = forMatch[2];
+    const bound = parseInt(forMatch[3]);
+    const inc = forMatch[4];
+
+    let iterations = 0;
+    if (inc === '++') {
+      iterations = op === '<' ? bound - start : op === '<=' ? bound - start + 1 : 0;
+    } else {
+      iterations = op === '>' ? start - bound : op === '>=' ? start - bound + 1 : 0;
+    }
+    iterations = Math.max(0, Math.min(iterations, 10)); // cap
+
+    // Find the for statement start index
+    const forIdx = result.indexOf(forMatch[0]);
+    // Find matching closing brace
+    const bodyStart = forIdx + forMatch[0].length;
+    let braceCount = 1;
+    let bodyEnd = bodyStart;
+    while (bodyEnd < result.length && braceCount > 0) {
+      if (result[bodyEnd] === '{') braceCount++;
+      if (result[bodyEnd] === '}') braceCount--;
+      bodyEnd++;
+    }
+
+    const body = result.substring(bodyStart, bodyEnd - 1);
+
+    let unrolled = '';
+    for (let i = 0; i < iterations; i++) {
+      unrolled += `// [loop iteration ${i + 1}/${iterations}]\n${body}\n`;
+    }
+
+    result = result.substring(0, forIdx) + unrolled + result.substring(bodyEnd);
+  }
+
+  return result;
+}
+
+/**
  * Block-aware C code parser for process lifecycle simulation.
  * Handles:
+ *   - for loops (unrolled)
  *   - fork()               standalone fork
  *   - if(fork() == 0) { }  child block
+ *   - if(pid < 0) { }      error block (skipped)
  *   - else { }             parent block
  *   - wait(NULL) / waitpid
- *   - exit(n)
+ *   - exit(n) / return
  *   - sleep(n)
  *   - printf(...)
  *   - getpid() / getppid() in printf
  */
-function parseCode(code: string): Instruction[] {
+function parseCode(rawCode: string): Instruction[] {
+  // Pre-process: unroll for loops
+  const code = unrollForLoops(rawCode);
   const lines = code.split('\n');
   const instructions: Instruction[] = [];
   let branchCounter = 0;
   let currentScope: 'any' | 'parent' | 'child' = 'any';
   let braceDepth = 0;
-  // Stack to track scope changes from if(fork)==0 blocks
   const scopeStack: { scope: 'any' | 'parent' | 'child'; braceDepth: number; branchId: number }[] = [];
+
+  // Track "skip block" for error-handling blocks like if(pid < 0)
+  let skipBlockDepth = -1; // -1 means not skipping
 
   instructions.push({
     type: 'start',
@@ -63,7 +123,35 @@ function parseCode(code: string): Instruction[] {
     const trimmed = raw.trim();
     const lineNum = i + 1;
 
-    // Skip includes, comments, blank lines, return statements
+    // Track brace depth for all lines
+    let lineOpenBraces = 0;
+    let lineCloseBraces = 0;
+    // Don't count braces inside strings
+    let inString = false;
+    for (const ch of trimmed) {
+      if (ch === '"') inString = !inString;
+      if (inString) continue;
+      if (ch === '{') lineOpenBraces++;
+      if (ch === '}') lineCloseBraces++;
+    }
+
+    const bracesBefore = braceDepth;
+    braceDepth += lineOpenBraces - lineCloseBraces;
+
+    // Handle skip block (error-handling if(pid < 0) blocks)
+    if (skipBlockDepth >= 0) {
+      if (braceDepth <= skipBlockDepth) {
+        skipBlockDepth = -1; // done skipping
+      }
+      // Check if this is an else after the skipped error block
+      if (skipBlockDepth < 0 && (trimmed.match(/^\}\s*else\s*\{?$/) || trimmed === 'else {' || trimmed === '} else {')) {
+        // Don't skip the else — it's the success path
+      } else {
+        continue;
+      }
+    }
+
+    // Skip includes, comments, blank lines, declarations, loop iteration markers
     if (
       trimmed === '' ||
       trimmed.startsWith('#include') ||
@@ -71,36 +159,37 @@ function parseCode(code: string): Instruction[] {
       trimmed.startsWith('/*') ||
       trimmed.startsWith('*') ||
       trimmed.startsWith('*/') ||
-      trimmed === 'int main() {' ||
-      trimmed === 'int main(){' ||
-      trimmed === 'int main(void) {' ||
-      trimmed === 'int main(void){' ||
-      trimmed.match(/^return\s/) ||
+      trimmed.match(/^int\s+main\s*\(/) ||
       trimmed === '}'
     ) {
-      // Track brace depth
-      for (const ch of trimmed) {
-        if (ch === '{') braceDepth++;
-        if (ch === '}') {
-          braceDepth--;
-          // Check if we're leaving a scoped block
-          if (scopeStack.length > 0) {
-            const top = scopeStack[scopeStack.length - 1];
-            if (braceDepth <= top.braceDepth) {
-              scopeStack.pop();
-              currentScope = scopeStack.length > 0 ? scopeStack[scopeStack.length - 1].scope : 'any';
-            }
-          }
+      // Handle scope exit on closing brace
+      if (lineCloseBraces > 0 && scopeStack.length > 0) {
+        const top = scopeStack[scopeStack.length - 1];
+        if (braceDepth <= top.braceDepth) {
+          scopeStack.pop();
+          currentScope = scopeStack.length > 0 ? scopeStack[scopeStack.length - 1].scope : 'any';
         }
       }
       continue;
     }
 
-    // Count braces in this line before parsing
-    let bracesBefore = braceDepth;
-    for (const ch of trimmed) {
-      if (ch === '{') braceDepth++;
-      if (ch === '}') braceDepth--;
+    // Pattern: if(pid < 0) or if(pid == -1) — error handling, skip entire block
+    if (trimmed.match(/if\s*\(\s*\w+\s*(<\s*0|==\s*-1)\s*\)/)) {
+      skipBlockDepth = bracesBefore;
+      continue;
+    }
+
+    // Pattern: return — treat as exit()
+    if (trimmed.match(/^return\s/)) {
+      instructions.push({
+        type: 'exit',
+        scope: currentScope,
+        lineNumber: lineNum,
+        code: trimmed,
+        osExplanation: 'return exits the process. Equivalent to exit() from main().',
+        blockDepth: bracesBefore,
+      });
+      continue;
     }
 
     // Pattern: if(fork() == 0) { ... } — child block
@@ -119,7 +208,6 @@ function parseCode(code: string): Instruction[] {
         branchId,
       });
 
-      // Push scope for the block
       scopeStack.push({
         scope: isEquals ? 'child' : 'parent',
         braceDepth: bracesBefore,
@@ -144,7 +232,6 @@ function parseCode(code: string): Instruction[] {
 
     // Pattern: else { ... } — after a fork-if, this is the parent block
     if (trimmed.match(/^\}\s*else\s*\{?$/) || trimmed === 'else {' || trimmed === '} else {') {
-      // Switch scope
       if (scopeStack.length > 0) {
         const top = scopeStack[scopeStack.length - 1];
         const newScope = top.scope === 'child' ? 'parent' : 'child';
